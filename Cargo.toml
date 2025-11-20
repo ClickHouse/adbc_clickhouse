@@ -1,0 +1,32 @@
+[package]
+name = "adbc_clickhouse"
+version = "0.0.1"
+edition = "2024"
+description = "Official ClickHouse ADBC driver."
+authors = [
+    "Austin Bonander <austin.bonander@clickhouse.com>",
+    "Serge Klochkov <serge.klochkov@clickhouse.com>"
+]
+# TODO: replace with ADBC client page on docs
+homepage = "https://clickhouse.com/docs/integrations/rust"
+# Note: private
+repository = "https://github.com/clickhouse/adbc_clickhouse"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+arrow-array = "57.0.0"
+arrow-buffer = "57.0.0"
+arrow-ipc = "57.0.0"
+arrow-schema = "57.0.0"
+adbc_core = "0.21.0"
+
+[dependencies.clickhouse]
+version = "0.14.0"
+
+[dependencies.chrono]
+version = "0.4.42"
+features = ["serde"]
+
+[dependencies.tokio]
+version = "1.48.0"
+features = ["rt-multi-thread"]
