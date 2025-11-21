@@ -1,9 +1,9 @@
-use std::ops::ControlFlow;
 use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_buffer::Buffer;
-use arrow_ipc::reader::{StreamDecoder};
+use arrow_ipc::reader::StreamDecoder;
 use arrow_schema::{ArrowError, SchemaRef};
 use clickhouse::query::BytesCursor;
+use std::ops::ControlFlow;
 
 pub(crate) struct ArrowStreamReader {
     tokio: tokio::runtime::Handle,
@@ -19,7 +19,10 @@ struct ReaderState {
 }
 
 impl ArrowStreamReader {
-    pub(crate) async fn begin(tokio: &tokio::runtime::Handle, cursor: BytesCursor) -> Result<Self, ArrowError> {
+    pub(crate) async fn begin(
+        tokio: &tokio::runtime::Handle,
+        cursor: BytesCursor,
+    ) -> Result<Self, ArrowError> {
         // We need to read the schema message so that `RecordBatchReader::schema()` is infallible.
         let mut state = ReaderState {
             cursor,
@@ -35,7 +38,9 @@ impl ArrowStreamReader {
             }
 
             if first_batch.is_some() {
-                return Err(ArrowError::SchemaError("received first RecordBatch before receiving Schema".into()));
+                return Err(ArrowError::SchemaError(
+                    "received first RecordBatch before receiving Schema".into(),
+                ));
             }
 
             match state.try_read_batch().await? {
@@ -43,7 +48,9 @@ impl ArrowStreamReader {
                     first_batch = Some(batch);
                 }
                 ControlFlow::Break(None) => {
-                    return Err(ArrowError::SchemaError("response stream ended before receiving Schema".into()));
+                    return Err(ArrowError::SchemaError(
+                        "response stream ended before receiving Schema".into(),
+                    ));
                 }
                 ControlFlow::Continue(()) => (),
             }
@@ -72,9 +79,7 @@ impl Iterator for ArrowStreamReader {
             return Some(Ok(first_batch));
         }
 
-        self.tokio
-            .block_on(self.state.next_batch())
-            .transpose()
+        self.tokio.block_on(self.state.next_batch()).transpose()
     }
 }
 
