@@ -38,9 +38,9 @@ pub struct ClickhouseDriver {
 impl ClickhouseDriver {
     /// Initialize the ClickHouse driver.
     ///
-    /// If this is called in the context of [an existing Tokio context][tokio::runtime::Handle::try_current],
+    /// If this is called in the context of [an existing Tokio runtime][tokio::runtime::Handle::try_current],
     /// then that runtime will be used. Otherwise, a new multithreaded runtime will be started.
-    pub fn init() -> adbc_core::error::Result<Self> {
+    pub fn init() -> Result<Self, Error> {
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             return Ok(Self {
                 tokio: TokioContext::Handle(handle),
@@ -57,9 +57,14 @@ impl ClickhouseDriver {
                 )
             })?;
 
-        Ok(Self {
+        Ok(Self::init_with(rt))
+    }
+
+    /// Initialize the ClickHouse driver, passing ownership of the given [Tokio runtime][tokio::runtime::Runtime].
+    pub fn init_with(rt: tokio::runtime::Runtime) -> Self {
+        Self {
             tokio: TokioContext::Runtime(rt),
-        })
+        }
     }
 }
 
@@ -663,7 +668,7 @@ fn fetch_blocking(
 ) -> Result<ArrowStreamReader, Error> {
     tokio.block_on(async {
         let cursor = query.fetch_bytes("ArrowStream").map_err(|e| {
-            Error::with_message_and_status("error executing query: {e:?}", Status::Internal)
+            Error::with_message_and_status(format!("error executing query: {e:?}"), Status::Internal)
         })?;
 
         Ok(ArrowStreamReader::begin(&tokio, cursor).await?)
