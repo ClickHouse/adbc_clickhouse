@@ -13,6 +13,14 @@ homepage = "https://clickhouse.com/docs/integrations/rust"
 repository = "https://github.com/clickhouse/adbc_clickhouse"
 license = "MIT OR Apache-2.0"
 
+[features]
+native-tls = ["clickhouse/native-tls"]
+rustls-tls = ["clickhouse/rustls-tls"]
+rustls-tls-aws-lc = ["clickhouse/rustls-tls-aws-lc"]
+rustls-tls-ring = ["clickhouse/rustls-tls-ring"]
+rustls-tls-native-roots = ["clickhouse/rustls-tls-native-roots"]
+rustls-tls-webpki-roots = ["clickhouse/rustls-tls-webpki-roots"]
+
 [dependencies]
 arrow-array = "57.0.0"
 arrow-buffer = "57.0.0"
