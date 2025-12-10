@@ -668,7 +668,10 @@ fn fetch_blocking(
 ) -> Result<ArrowStreamReader, Error> {
     tokio.block_on(async {
         let cursor = query.fetch_bytes("ArrowStream").map_err(|e| {
-            Error::with_message_and_status(format!("error executing query: {e:?}"), Status::Internal)
+            Error::with_message_and_status(
+                format!("error executing query: {e:?}"),
+                Status::Internal,
+            )
         })?;
 
         Ok(ArrowStreamReader::begin(&tokio, cursor).await?)
