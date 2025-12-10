@@ -1,15 +1,16 @@
-use arrow_array::{create_array, RecordBatch, RecordBatchReader};
-use adbc_core::{Connection, Database, Driver, Optionable, Statement};
-use adbc_core::options::OptionDatabase;
-use arrow_schema::{DataType, Field, Schema};
 use adbc_clickhouse::ClickhouseDriver;
+use adbc_core::options::OptionDatabase;
+use adbc_core::{Connection, Database, Driver, Optionable, Statement};
+use arrow_array::{RecordBatch, RecordBatchReader, create_array};
+use arrow_schema::{DataType, Field, Schema};
 
 #[test]
 fn basic_query() {
     let mut driver = test_driver();
 
     let mut db = driver.new_database().unwrap();
-    db.set_option(OptionDatabase::Uri, "http://localhost:8123/".into()).unwrap();
+    db.set_option(OptionDatabase::Uri, "http://localhost:8123/".into())
+        .unwrap();
 
     let mut conn = db.new_connection().unwrap();
 
@@ -32,17 +33,23 @@ fn basic_query() {
         Schema::new(vec![
             Field::new("number", DataType::UInt64, false),
             Field::new("name", DataType::Utf8, false),
-        ]).into(),
+        ])
+        .into(),
         vec![
             create_array!(UInt64, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
-            create_array!(Utf8, ["test_0", "test_1", "test_2", "test_3", "test_4", "test_5", "test_6", "test_7", "test_8", "test_9"]),
-        ]
+            create_array!(
+                Utf8,
+                [
+                    "test_0", "test_1", "test_2", "test_3", "test_4", "test_5", "test_6", "test_7",
+                    "test_8", "test_9"
+                ]
+            ),
+        ],
     )
-        .unwrap();
+    .unwrap();
 
     assert_eq!(joined, expected);
 }
-
 
 pub(crate) fn test_driver() -> ClickhouseDriver {
     let rt = tokio::runtime::Builder::new_multi_thread()

@@ -185,21 +185,21 @@ impl Connection for ClickhouseConnection {
 
     fn get_objects(
         &self,
-        depth: ObjectDepth,
-        catalog: Option<&str>,
-        db_schema: Option<&str>,
-        table_name: Option<&str>,
-        table_type: Option<Vec<&str>>,
-        column_name: Option<&str>,
+        _depth: ObjectDepth,
+        _catalog: Option<&str>,
+        _db_schema: Option<&str>,
+        _table_name: Option<&str>,
+        _table_type: Option<Vec<&str>>,
+        _column_name: Option<&str>,
     ) -> adbc_core::error::Result<impl RecordBatchReader + Send> {
         err_unimplemented!("ClickhouseConnection::get_objects()" -> ArrowStreamReader)
     }
 
     fn get_table_schema(
         &self,
-        catalog: Option<&str>,
-        db_schema: Option<&str>,
-        table_name: &str,
+        _catalog: Option<&str>,
+        _db_schema: Option<&str>,
+        _table_name: &str,
     ) -> adbc_core::error::Result<Schema> {
         err_unimplemented!("ClickhouseConnection::get_table_schema()" -> Schema)
     }
@@ -223,10 +223,10 @@ impl Connection for ClickhouseConnection {
 
     fn get_statistics(
         &self,
-        catalog: Option<&str>,
-        db_schema: Option<&str>,
-        table_name: Option<&str>,
-        approximate: bool,
+        _catalog: Option<&str>,
+        _db_schema: Option<&str>,
+        _table_name: Option<&str>,
+        _approximate: bool,
     ) -> adbc_core::error::Result<impl RecordBatchReader + Send> {
         err_unimplemented!("ClickhouseConnection::get_statistics()" -> ArrowStreamReader)
     }
@@ -247,7 +247,7 @@ impl Connection for ClickhouseConnection {
 
     fn read_partition(
         &self,
-        partition: impl AsRef<[u8]>,
+        _partition: impl AsRef<[u8]>,
     ) -> adbc_core::error::Result<impl RecordBatchReader + Send> {
         err_unimplemented!("ClickhouseConnection::read_partition()" -> ArrowStreamReader)
     }
@@ -288,6 +288,7 @@ pub struct ClickhouseStatement {
     state: StatementState,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum StatementState {
     Reset,
     Query(Query),
@@ -311,7 +312,7 @@ impl Statement for ClickhouseStatement {
 
     fn bind_stream(
         &mut self,
-        reader: Box<dyn RecordBatchReader + Send>,
+        _reader: Box<dyn RecordBatchReader + Send>,
     ) -> adbc_core::error::Result<()> {
         err_unimplemented!("ClickhouseStatement::bind_stream()")
     }
@@ -351,7 +352,7 @@ impl Statement for ClickhouseStatement {
         Ok(())
     }
 
-    fn set_substrait_plan(&mut self, plan: impl AsRef<[u8]>) -> adbc_core::error::Result<()> {
+    fn set_substrait_plan(&mut self, _plan: impl AsRef<[u8]>) -> adbc_core::error::Result<()> {
         err_unimplemented!("ClickhouseStatement::set_substrait_plan()")
     }
 
@@ -668,9 +669,12 @@ fn fetch_blocking(
 ) -> Result<ArrowStreamReader, Error> {
     tokio.block_on(async {
         let cursor = query.fetch_bytes("ArrowStream").map_err(|e| {
-            Error::with_message_and_status(format!("error executing query: {e:?}"), Status::Internal)
+            Error::with_message_and_status(
+                format!("error executing query: {e:?}"),
+                Status::Internal,
+            )
         })?;
 
-        Ok(ArrowStreamReader::begin(&tokio, cursor).await?)
+        Ok(ArrowStreamReader::begin(tokio, cursor).await?)
     })
 }
