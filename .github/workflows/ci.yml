@@ -72,8 +72,8 @@ jobs:
       - name: Start ClickHouse in Docker
         uses: hoverkraft-tech/compose-action@v2.2.0
         with:
-          compose-file: 'docker-compose.yml'
-          down-flags: '--volumes'
+          compose-file: docker-compose.yml
+          down-flags: --volumes
 
       - run: rustup show active-toolchain -v
       - name: Run tests
@@ -83,20 +83,18 @@ jobs:
       - name: Run tests with all features
         run: cargo llvm-cov test --workspace --no-report --all-features
 
+      # Community PRs won't have access to the secrets
+      # even when the workflow run is approved by a maintainer,
+      # so we need to skip the Cloud tests in that case.
       - name: Check access to GitHub secrets
         id: check-secrets-access
-        run: |
-          if [[ "${{ github.actor }}" == "loyd" ]]; then
-            echo "has-access=true" >> $GITHUB_OUTPUT
-            echo "Paul Loyd is our VIP"
-          elif gh api orgs/ClickHouse/members/${{ github.actor }} --silent; then
-            echo "has-access=true" >> $GITHUB_OUTPUT
-          else
-            echo "has-access=false" >> $GITHUB_OUTPUT
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         continue-on-error: true
+        run: |
+          if [[ -n "${{ secrets.INTEGRATIONS_TEAM_TESTS_CLOUD_HOST_SMT }}" ]]; then
+            echo "has-access=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-access=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Run tests with ClickHouse Cloud
         if: steps.check-secrets-access.outputs.has-access == 'true'
@@ -111,18 +109,19 @@ jobs:
           cargo llvm-cov test cloud_ --no-report --features rustls-tls -- --nocapture
           cargo llvm-cov test https_errors --no-report -- --nocapture
 
-      - name: Generate code coverage
-        if: steps.check-secrets-access.outputs.has-access == 'true'
-        run: cargo llvm-cov report --codecov --output-path codecov.json
+      # - name: Generate code coverage
+      #   run: cargo llvm-cov report --codecov --output-path codecov.json
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
-        if: steps.check-secrets-access.outputs.has-access == 'true'
-        with:
-          files: codecov.json
-          token: ${{ secrets.CODECOV_TOKEN }}
-          slug: ClickHouse/adbc_clickhouse
-          fail_ci_if_error: true
+      # Similarly to the Cloud tests, we skip coverage upload for community PRs, 
+      # as they won't have access to the Codecov token.
+      # - name: Upload coverage to Codecov
+      #   uses: codecov/codecov-action@v5
+      #   if: steps.check-secrets-access.outputs.has-access == 'true'
+      #   with:
+      #     files: codecov.json
+      #     token: ${{ secrets.CODECOV_TOKEN }}
+      #     slug: ClickHouse/adbc_clickhouse
+      #     fail_ci_if_error: true
 
   miri:
     needs: build
