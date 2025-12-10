@@ -72,7 +72,7 @@ jobs:
       - name: Start ClickHouse in Docker
         uses: hoverkraft-tech/compose-action@v2.2.0
         with:
-          compose-file: .docker/compose.yml'
+          compose-file: .docker-compose.yml'
           down-flags: --volumes
 
       - run: rustup show active-toolchain -v
