@@ -109,19 +109,19 @@ jobs:
           cargo llvm-cov test cloud_ --no-report --features rustls-tls -- --nocapture
           cargo llvm-cov test https_errors --no-report -- --nocapture
 
-      - name: Generate code coverage
-        run: cargo llvm-cov report --codecov --output-path codecov.json
+      # - name: Generate code coverage
+      #   run: cargo llvm-cov report --codecov --output-path codecov.json
 
       # Similarly to the Cloud tests, we skip coverage upload for community PRs, 
       # as they won't have access to the Codecov token.
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
-        if: steps.check-secrets-access.outputs.has-access == 'true'
-        with:
-          files: codecov.json
-          token: ${{ secrets.CODECOV_TOKEN }}
-          slug: ClickHouse/adbc_clickhouse
-          fail_ci_if_error: true
+      # - name: Upload coverage to Codecov
+      #   uses: codecov/codecov-action@v5
+      #   if: steps.check-secrets-access.outputs.has-access == 'true'
+      #   with:
+      #     files: codecov.json
+      #     token: ${{ secrets.CODECOV_TOKEN }}
+      #     slug: ClickHouse/adbc_clickhouse
+      #     fail_ci_if_error: true
 
   miri:
     needs: build
