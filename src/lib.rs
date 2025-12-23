@@ -16,6 +16,8 @@ use clickhouse::query::Query;
 
 mod reader;
 
+mod schema;
+
 macro_rules! err_unimplemented {
     ($path:literal) => {
         return Err(Error::with_message_and_status(
@@ -198,10 +200,11 @@ impl Connection for ClickhouseConnection {
     fn get_table_schema(
         &self,
         _catalog: Option<&str>,
-        _db_schema: Option<&str>,
-        _table_name: &str,
+        db_schema: Option<&str>,
+        table_name: &str,
     ) -> adbc_core::error::Result<Schema> {
-        err_unimplemented!("ClickhouseConnection::get_table_schema()" -> Schema)
+        self.tokio
+            .block_on(schema::of_table(&self.client, db_schema, table_name))
     }
 
     fn get_table_types(&self) -> adbc_core::error::Result<impl RecordBatchReader + Send> {
