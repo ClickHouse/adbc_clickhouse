@@ -4,6 +4,8 @@ use adbc_core::{Connection, Database, Driver, Optionable, Statement};
 use arrow_array::{RecordBatch, RecordBatchReader, create_array};
 use arrow_schema::{DataType, Field, Schema};
 
+mod get_table_schema;
+
 #[test]
 fn basic_query() {
     let mut driver = test_driver();
@@ -51,7 +53,7 @@ fn basic_query() {
     assert_eq!(joined, expected);
 }
 
-pub(crate) fn test_driver() -> ClickhouseDriver {
+fn test_driver() -> ClickhouseDriver {
     let rt = tokio::runtime::Builder::new_multi_thread()
         // We don't want to spawn `num_cpus` threads for every test.
         .worker_threads(1)

@@ -3,27 +3,40 @@ use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
 use clickhouse::Client;
 use clickhouse_types::DataTypeNode;
 use clickhouse_types::data_types::{DateTimePrecision, DecimalType, EnumType};
+use serde::{Deserialize, Deserializer};
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(clickhouse::Row, serde::Deserialize)]
+#[allow(dead_code)]
 struct Column {
     name: String,
     r#type: String,
+    // FIXME: `clickhouse::Row` derive doesn't allow missing columns
+    default_type: String,
+    default_expression: String,
+    comment: String,
+    codec_expression: String,
+    ttl_expression: String,
 }
 
 #[derive(clickhouse::Row, serde::Deserialize)]
 #[serde(default)]
 struct Settings {
     /// <https://clickhouse.com/docs/operations/settings/formats#output_format_arrow_string_as_string>
+    #[serde(deserialize_with = "deserialize_bool_setting")]
     string_as_string: bool,
     /// <https://clickhouse.com/docs/operations/settings/formats#output_format_arrow_fixed_string_as_fixed_byte_array>
+    #[serde(deserialize_with = "deserialize_bool_setting")]
     fixed_string_as_fixed_byte_array: bool,
     /// <https://clickhouse.com/docs/operations/settings/formats#output_format_arrow_low_cardinality_as_dictionary>
+    #[serde(deserialize_with = "deserialize_bool_setting")]
     low_cardinality_as_dictionary: bool,
     /// <https://clickhouse.com/docs/operations/settings/formats#output_format_arrow_use_signed_indexes_for_dictionary>
+    #[serde(deserialize_with = "deserialize_bool_setting")]
     use_signed_indexes_for_dictionary: bool,
     /// <https://clickhouse.com/docs/operations/settings/formats#output_format_arrow_use_64_bit_indexes_for_dictionary>
+    #[serde(deserialize_with = "deserialize_bool_setting")]
     use_64_bit_indexes_for_dictionary: bool,
 }
 
@@ -397,4 +410,21 @@ fn low_cardinality_to_arrow(settings: &Settings, inner_ty: &DataTypeNode) -> Res
     };
 
     Ok(DataType::Dictionary(index_ty.into(), inner_ty.into()))
+}
+
+fn deserialize_bool_setting<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    let Some(s) = Option::<String>::deserialize(deserializer)? else {
+        return Ok(false);
+    };
+
+    match &*s {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        _ => Err(Error::custom(format!("expected \"0\" or \"1\", got {s:?}"))),
+    }
 }
