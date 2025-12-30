@@ -236,6 +236,7 @@ Schema {
         Field {
             name: \"nullable_low_car_str\",
             data_type: Utf8,
+            nullable: true,
             metadata: {
                 \"CLICKHOUSE:type\": \"LowCardinality(Nullable(String))\",
             },

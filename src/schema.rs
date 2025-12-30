@@ -254,7 +254,7 @@ fn ch_type_to_arrow(
             ch_type_to_arrow(settings, inner, &mut false)
         }
         // Note: LowCardinality is not necessarily as simple as unwrapping the type
-        DataTypeNode::LowCardinality(inner) => low_cardinality_to_arrow(settings, inner),
+        DataTypeNode::LowCardinality(inner) => low_cardinality_to_arrow(settings, inner, nullable),
         // https://github.com/ClickHouse/ClickHouse/blob/3196ab525aa6f1fef8d367db7610b765f7737f01/src/Processors/Formats/Impl/CHColumnToArrowColumn.cpp#L976-L983
         DataTypeNode::Array(inner) => {
             let mut nullable = false;
@@ -378,8 +378,12 @@ fn tuple_to_struct(settings: &Settings, types: &[DataTypeNode]) -> Result<DataTy
 }
 
 // https://github.com/ClickHouse/ClickHouse/blob/3196ab525aa6f1fef8d367db7610b765f7737f01/src/Processors/Formats/Impl/CHColumnToArrowColumn.cpp#L1001-L1010
-fn low_cardinality_to_arrow(settings: &Settings, inner_ty: &DataTypeNode) -> Result<DataType> {
-    let inner_ty = ch_type_to_arrow(settings, inner_ty, &mut false)?;
+fn low_cardinality_to_arrow(
+    settings: &Settings,
+    inner_ty: &DataTypeNode,
+    nullable: &mut bool,
+) -> Result<DataType> {
+    let inner_ty = ch_type_to_arrow(settings, inner_ty, nullable)?;
 
     if !settings.low_cardinality_as_dictionary {
         return Ok(inner_ty);
