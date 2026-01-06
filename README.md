@@ -4,6 +4,9 @@ The official ClickHouse driver for [Arrow Database Connectivity (ADBC)](https://
 
 Implemented using the [official ClickHouse client for Rust](https://clickhouse.com/docs/integrations/rust).
 
+## Note: Work-in-Progress
+This driver is still under active development and should not be considered ready for production use.
+
 ## Feature Flags
 
 ### TLS Support
