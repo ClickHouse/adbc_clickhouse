@@ -174,7 +174,7 @@ fn bind_record_batch(mut query: Query, batch: RecordBatch) -> Result<Query, Erro
         2.. => {
             return Err(Error::with_message_and_status(
                 "binding a RecordBatch with more than one row is only allowed for non-streaming inserts; \
-                streaming inserts must start with `INSERT INTO`  (after any comments) and end with `FORMAT ArrowStream`",
+                streaming inserts must start with `INSERT INTO` (after any comments) and end with `FORMAT ArrowStream`",
                 Status::InvalidArguments,
             ));
         }
