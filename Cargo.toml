@@ -32,10 +32,7 @@ clickhouse-types = "0.1.1"
 uuid = { version = "1.19.0", features = ["v4"] }
 
 [dependencies.clickhouse]
-version = "0.14.0"
-# FIXME: delete before merge
-git = "https://github.com/clickhouse/clickhouse-rs"
-branch = "ab/insert-formatted"
+version = "0.14.2"
 
 [dependencies.serde]
 version = "1.0.228"
