@@ -2,7 +2,7 @@ use crate::reader::ArrowStreamReader;
 use adbc_core::error::{Error, Status};
 use adbc_core::options::{InfoCode, ObjectDepth, OptionConnection, OptionDatabase, OptionValue};
 use adbc_core::{Connection, Database, Driver, Optionable, schemas};
-use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader, record_batch};
+use arrow_array::{RecordBatchIterator, RecordBatchReader, record_batch};
 use arrow_schema::Schema;
 use clickhouse::Client;
 use statement::ClickhouseStatement;
@@ -285,11 +285,6 @@ impl Optionable for ClickhouseConnection {
     }
 }
 
-enum BindType {
-    Single(RecordBatch),
-    Stream(Box<dyn RecordBatchReader + Send>),
-}
-
 enum TokioContext {
     Runtime(tokio::runtime::Runtime),
     Handle(tokio::runtime::Handle),
@@ -304,6 +299,8 @@ impl TokioContext {
     }
 }
 
+// RustRover incorrectly sees `value` as unused
+//noinspection RsLiveness
 fn apply_database_option(
     client: Client,
     key: OptionDatabase,

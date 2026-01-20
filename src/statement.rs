@@ -1,4 +1,3 @@
-use crate::BindType;
 use crate::reader::ArrowStreamReader;
 use adbc_core::error::{Error, Status};
 use adbc_core::options::{OptionStatement, OptionValue};
@@ -92,7 +91,7 @@ impl Statement for ClickhouseStatement {
         }
 
         // FIXME: implement proper support for `X-ClickHouse-Summary` header
-        fetch_blocking(&self.client, &self.tokio, sql, self.bind.take())?;
+        execute_blocking(&self.client, &self.tokio, sql, self.bind.take())?;
         Ok(None)
     }
 
@@ -162,6 +161,37 @@ fn expect_sql_query(sql_query: &Option<String>) -> Result<&str, Error> {
             Status::InvalidState,
         )
     })
+}
+
+fn bind_query(mut query: Query, bind: Option<BindType>) -> Result<Query, Error> {
+    match bind {
+        // It's not clear if `bind_stream` is meant to be used with anything but bulk ingestion,
+        // but one suggested use-case is that each batch in the stream represents a single execution
+        // of the query.
+        //
+        // I don't think the Arrow team want to commit to those semantics until we have a
+        // multi-result-set API: https://github.com/apache/arrow-adbc/pull/3871
+        Some(BindType::Stream(mut stream)) => {
+            let args = stream.next().transpose()?;
+
+            if stream.next().transpose()?.is_some() {
+                return Err(Error::with_message_and_status(
+                    "received more than one record batch from `Statement::bind_stream`",
+                    Status::InvalidData,
+                ));
+            }
+
+            if let Some(args) = args {
+                query = bind_record_batch(query, args)?;
+            }
+        }
+        Some(BindType::Single(args)) => {
+            query = bind_record_batch(query, args)?;
+        }
+        None => (),
+    }
+
+    Ok(query)
 }
 
 fn bind_record_batch(mut query: Query, batch: RecordBatch) -> Result<Query, Error> {
@@ -388,6 +418,8 @@ fn execute_streaming_insert(
     mut stream: Box<dyn RecordBatchReader + Send>,
 ) -> Result<Option<i64>> {
     // In case any methods we invoke result in a call to Tokio
+    // This whole function could just be inside a `tokio.block_on()`
+    // but that results in a larger generated future type
     let _guard = tokio.enter();
 
     let insert = client
@@ -428,29 +460,7 @@ fn fetch_blocking(
     let _guard = tokio.enter();
 
     let mut query = client.query(sql);
-
-    match bind {
-        // Not sure if `bind_stream` is meant to be used with anything but bulk ingestion,
-        // but I could see it as a way to pass *at most* one (zero or one) batch of arguments.
-        Some(BindType::Stream(mut stream)) => {
-            let args = stream.next().transpose()?;
-
-            if stream.next().transpose()?.is_some() {
-                return Err(Error::with_message_and_status(
-                    "received more than one record batch from `Statement::bind_stream`",
-                    Status::InvalidData,
-                ));
-            }
-
-            if let Some(args) = args {
-                query = bind_record_batch(query, args)?;
-            }
-        }
-        Some(BindType::Single(args)) => {
-            query = bind_record_batch(query, args)?;
-        }
-        None => (),
-    }
+    query = bind_query(query, bind)?;
 
     let cursor = query.fetch_bytes("ArrowStream").map_err(|e| {
         Error::with_message_and_status(format!("error executing query: {e:?}"), Status::Internal)
@@ -459,6 +469,29 @@ fn fetch_blocking(
     tokio
         .block_on(ArrowStreamReader::begin(tokio, cursor))
         .map_err(Into::into)
+}
+
+fn execute_blocking(
+    client: &Client,
+    tokio: &tokio::runtime::Handle,
+    sql: &str,
+    bind: Option<BindType>,
+) -> Result<Option<i64>, Error> {
+    // In case any methods we invoke result in a call to Tokio
+    // This whole function could just be inside a `tokio.block_on()`
+    // but that results in a larger generated future type
+    let _guard = tokio.enter();
+
+    let mut query = client.query(sql).with_option("wait_end_of_query", "1");
+    query = bind_query(query, bind)?;
+
+    tokio.block_on(query.execute()).map_err(|e| {
+        Error::with_message_and_status(format!("error executing query: {e:?}"), Status::Internal)
+    })?;
+
+    // TODO: parse `X-ClickHouse-Summary` and return rows modified
+    // https://github.com/ClickHouse/adbc_clickhouse/issues/15
+    Ok(None)
 }
 
 fn is_streaming_insert(sql: &str) -> bool {
@@ -677,4 +710,9 @@ mod tests {
             )
         }
     }
+}
+
+enum BindType {
+    Single(RecordBatch),
+    Stream(Box<dyn RecordBatchReader + Send>),
 }
