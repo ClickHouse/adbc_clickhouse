@@ -300,7 +300,15 @@ fn arrow_decimal(scale: &u8, precision: &u8, kind: &DecimalType) -> Result<DataT
 
     // Arrow format allows negative precision which right-pads the decimal representation
     // A naive cast would produce an invalid value
-    let precision = i8::try_from(*precision).unwrap_or(i8::MAX);
+    //
+    // Max precision for `Decimal256` is 76 so an overflow here likely indicates data corruption:
+    // https://clickhouse.com/docs/sql-reference/data-types/decimal#decimal-value-ranges
+    let precision = i8::try_from(*precision).map_err(|_| {
+        Error::with_message_and_status(
+            format!("{kind} precision out of range: {precision}"),
+            Status::InvalidData,
+        )
+    })?;
 
     match kind {
         DecimalType::Decimal32 => Ok(DataType::Decimal32(*scale, precision)),
