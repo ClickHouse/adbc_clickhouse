@@ -7,12 +7,7 @@ use arrow_schema::Schema;
 use clickhouse::Client;
 use statement::ClickhouseStatement;
 use std::collections::HashSet;
-use arrow_array::cast::{AsArray, as_largestring_array, as_string_array};
-use arrow_array::types::*;
-use clickhouse::query::Query;
 use uuid::Uuid;
-
-mod reader;
 
 macro_rules! err_unimplemented {
     ($path:literal) => {
