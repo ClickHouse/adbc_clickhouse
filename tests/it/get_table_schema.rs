@@ -122,7 +122,7 @@ Schema {
         Field {
             name: \"int128\",
             data_type: FixedSizeBinary(
-                32,
+                16,
             ),
             metadata: {
                 \"CLICKHOUSE:type\": \"Int128\",
@@ -159,7 +159,7 @@ Schema {
         Field {
             name: \"uint128\",
             data_type: FixedSizeBinary(
-                32,
+                16,
             ),
             metadata: {
                 \"CLICKHOUSE:type\": \"UInt128\",
@@ -168,7 +168,7 @@ Schema {
         Field {
             name: \"int256\",
             data_type: FixedSizeBinary(
-                64,
+                32,
             ),
             metadata: {
                 \"CLICKHOUSE:type\": \"Int256\",
@@ -177,7 +177,7 @@ Schema {
         Field {
             name: \"uint256\",
             data_type: FixedSizeBinary(
-                64,
+                32,
             ),
             metadata: {
                 \"CLICKHOUSE:type\": \"UInt256\",

@@ -197,15 +197,15 @@ fn ch_type_to_arrow(
         DataTypeNode::UInt32 => Ok(DataType::UInt32),
         DataTypeNode::UInt64 => Ok(DataType::UInt64),
         // https://github.com/ClickHouse/ClickHouse/blob/3196ab525aa6f1fef8d367db7610b765f7737f01/src/Processors/Formats/Impl/CHColumnToArrowColumn.cpp#L93-L96
-        DataTypeNode::UInt128 => Ok(DataType::FixedSizeBinary(32)),
-        DataTypeNode::UInt256 => Ok(DataType::FixedSizeBinary(64)),
+        DataTypeNode::UInt128 => Ok(DataType::FixedSizeBinary(16)),
+        DataTypeNode::UInt256 => Ok(DataType::FixedSizeBinary(32)),
         DataTypeNode::Int8 => Ok(DataType::Int8),
         DataTypeNode::Int16 => Ok(DataType::Int16),
         DataTypeNode::Int32 => Ok(DataType::Int32),
         DataTypeNode::Int64 => Ok(DataType::Int64),
         // https://github.com/ClickHouse/ClickHouse/blob/3196ab525aa6f1fef8d367db7610b765f7737f01/src/Processors/Formats/Impl/CHColumnToArrowColumn.cpp#L93-L96
-        DataTypeNode::Int128 => Ok(DataType::FixedSizeBinary(32)),
-        DataTypeNode::Int256 => Ok(DataType::FixedSizeBinary(64)),
+        DataTypeNode::Int128 => Ok(DataType::FixedSizeBinary(16)),
+        DataTypeNode::Int256 => Ok(DataType::FixedSizeBinary(32)),
         DataTypeNode::Float32 => Ok(DataType::Float32),
         DataTypeNode::Float64 => Ok(DataType::Float64),
         // Note: not the same as IEE-754 standard half-precision floating point.
