@@ -28,8 +28,15 @@ arrow-ipc = { version = "57.0.0", features = ["lz4"] }
 arrow-schema = "57.0.0"
 adbc_core = "0.21.0"
 
+clickhouse-types = "0.1.1"
+uuid = { version = "1.19.0", features = ["v4"] }
+
 [dependencies.clickhouse]
 version = "0.14.0"
+
+[dependencies.serde]
+version = "1.0.228"
+features = ["derive"]
 
 [dependencies.chrono]
 version = "0.4.42"

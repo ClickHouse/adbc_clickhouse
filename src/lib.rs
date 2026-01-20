@@ -13,8 +13,11 @@ use adbc_core::error::{Error, Status};
 use arrow_array::cast::{AsArray, as_largestring_array, as_string_array};
 use arrow_array::types::*;
 use clickhouse::query::Query;
+use uuid::Uuid;
 
 mod reader;
+
+mod schema;
 
 macro_rules! err_unimplemented {
     ($path:literal) => {
@@ -109,7 +112,10 @@ impl Database for ClickhouseDatabase {
         opts: impl IntoIterator<Item = (OptionConnection, OptionValue)>,
     ) -> adbc_core::error::Result<Self::ConnectionType> {
         let mut connection = ClickhouseConnection {
-            client: self.client.clone(),
+            client: self
+                .client
+                .clone()
+                .with_option("session_id", Uuid::new_v4().to_string()),
             tokio: self.tokio.clone(),
         };
 
@@ -198,10 +204,11 @@ impl Connection for ClickhouseConnection {
     fn get_table_schema(
         &self,
         _catalog: Option<&str>,
-        _db_schema: Option<&str>,
-        _table_name: &str,
+        db_schema: Option<&str>,
+        table_name: &str,
     ) -> adbc_core::error::Result<Schema> {
-        err_unimplemented!("ClickhouseConnection::get_table_schema()" -> Schema)
+        self.tokio
+            .block_on(schema::of_table(&self.client, db_schema, table_name))
     }
 
     fn get_table_types(&self) -> adbc_core::error::Result<impl RecordBatchReader + Send> {
@@ -328,7 +335,13 @@ impl Statement for ClickhouseStatement {
     }
 
     fn execute_update(&mut self) -> adbc_core::error::Result<Option<i64>> {
-        err_unimplemented!("ClickhouseStatement::execute_update()")
+        match mem::replace(&mut self.state, StatementState::Reset) {
+            StatementState::Reset => {
+                let sql = expect_sql_query(&self.sql_query)?;
+                execute_blocking(&self.tokio, self.client.query(sql))
+            }
+            StatementState::Query(query) => execute_blocking(&self.tokio, query),
+        }
     }
 
     fn execute_schema(&mut self) -> adbc_core::error::Result<Schema> {
@@ -676,5 +689,24 @@ fn fetch_blocking(
         })?;
 
         Ok(ArrowStreamReader::begin(tokio, cursor).await?)
+    })
+}
+
+fn execute_blocking(tokio: &tokio::runtime::Handle, query: Query) -> Result<Option<i64>, Error> {
+    tokio.block_on(async {
+        query
+            .with_option("readonly", "0")
+            .with_option("wait_end_of_query", "1")
+            .execute()
+            .await
+            .map_err(|e| {
+                Error::with_message_and_status(
+                    format!("error executing query: {e:?}"),
+                    Status::Internal,
+                )
+            })?;
+
+        // TODO: parse `X-ClickHouse-Summary` and return rows modified
+        Ok(None)
     })
 }
