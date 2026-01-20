@@ -26,6 +26,11 @@ pub struct ClickhouseStatement {
     bind: Option<BindType>,
 }
 
+enum BindType {
+    Single(RecordBatch),
+    Stream(Box<dyn RecordBatchReader + Send>),
+}
+
 impl ClickhouseStatement {
     pub(crate) fn new(client: Client, tokio: tokio::runtime::Handle) -> Self {
         Self {
@@ -710,9 +715,4 @@ mod tests {
             )
         }
     }
-}
-
-enum BindType {
-    Single(RecordBatch),
-    Stream(Box<dyn RecordBatchReader + Send>),
 }
