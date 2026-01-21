@@ -1,8 +1,12 @@
 use adbc_clickhouse::ClickhouseDriver;
 use adbc_core::options::OptionDatabase;
 use adbc_core::{Connection, Database, Driver, Optionable, Statement};
-use arrow_array::{RecordBatch, RecordBatchReader, create_array};
+use arrow_array::types::Int32Type;
+use arrow_array::{
+    PrimitiveArray, RecordBatch, RecordBatchIterator, RecordBatchReader, StringArray, create_array,
+};
 use arrow_schema::{DataType, Field, Schema};
+use std::sync::Arc;
 
 mod get_table_schema;
 
@@ -53,7 +57,112 @@ fn basic_query() {
     assert_eq!(joined, expected);
 }
 
-fn test_driver() -> ClickhouseDriver {
+#[test]
+fn streaming_insert() {
+    let mut driver = test_driver();
+
+    let mut db = driver.new_database().unwrap();
+    db.set_option(OptionDatabase::Uri, "http://localhost:8123/".into())
+        .unwrap();
+
+    let mut conn = db.new_connection().unwrap();
+
+    let mut create_table = conn.new_statement().unwrap();
+    create_table
+        .set_sql_query(
+            "CREATE TEMPORARY TABLE foo(bar Int32, baz String) ENGINE = MergeTree ORDER BY bar",
+        )
+        .unwrap();
+
+    create_table.execute_update().unwrap();
+
+    let batch_size = 5;
+    let num_batches = 10;
+    let mut next_id = 1..;
+
+    let mut batches = Vec::new();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("bar", DataType::Int32, false),
+        Field::new("baz", DataType::Utf8, false),
+    ]));
+
+    for batch in 0..num_batches {
+        let bars: PrimitiveArray<Int32Type> = (0..batch_size)
+            .zip(&mut next_id)
+            .map(|(_, id)| id)
+            .collect();
+
+        let bazzes: StringArray = bars
+            .iter()
+            .filter_map(|bar| {
+                let bar = bar?;
+                Some(format!("batch_{batch}_bar_{bar}"))
+            })
+            .collect::<Vec<String>>()
+            .into();
+
+        batches.push(RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(bars), Arc::new(bazzes)],
+        ));
+    }
+
+    let mut insert = conn.new_statement().unwrap();
+    insert
+        .set_sql_query("INSERT INTO foo(bar, baz) FORMAT ArrowStream")
+        .unwrap();
+
+    let batches = RecordBatchIterator::new(batches, schema.clone());
+
+    insert.bind_stream(Box::new(batches)).unwrap();
+
+    insert.execute_update().unwrap();
+
+    let mut select = conn.new_statement().unwrap();
+    select
+        .set_sql_query(
+            "SELECT \
+         count(*) AS row_count, \
+         first_value(bar) AS min_bar, \
+         first_value(baz) AS min_baz,
+         last_value(bar) AS max_bar, \
+         last_value(baz) AS max_baz \
+         FROM (SELECT * FROM foo ORDER BY bar)",
+        )
+        .unwrap();
+
+    let mut reader = select.execute().unwrap();
+
+    let batch = reader.next().expect("expected one record").unwrap();
+
+    assert!(reader.next().is_none(), "expected only one record");
+    assert_eq!(batch.num_rows(), 1);
+
+    let expected_count = batch_size * num_batches;
+
+    let expected = RecordBatch::try_new(
+        Schema::new(vec![
+            Field::new("row_count", DataType::UInt64, false),
+            Field::new("min_bar", DataType::Int32, false),
+            Field::new("min_baz", DataType::Utf8, false),
+            Field::new("max_bar", DataType::Int32, false),
+            Field::new("max_baz", DataType::Utf8, false),
+        ])
+        .into(),
+        vec![
+            create_array!(UInt64, [expected_count]),
+            create_array!(Int32, [1]),
+            create_array!(Utf8, ["batch_0_bar_1"]),
+            create_array!(Int32, [expected_count as i32]),
+            create_array!(Utf8, ["batch_9_bar_50"]),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(batch, expected);
+}
+
+pub(crate) fn test_driver() -> ClickhouseDriver {
     let rt = tokio::runtime::Builder::new_multi_thread()
         // We don't want to spawn `num_cpus` threads for every test.
         .worker_threads(1)
