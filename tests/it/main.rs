@@ -69,7 +69,9 @@ fn streaming_insert() {
 
     let mut create_table = conn.new_statement().unwrap();
     create_table
-        .set_sql_query("CREATE TEMPORARY TABLE foo(bar Int32, baz String) ORDER BY bar")
+        .set_sql_query(
+            "CREATE TEMPORARY TABLE foo(bar Int32, baz String) ENGINE = MergeTree ORDER BY bar",
+        )
         .unwrap();
 
     create_table.execute_update().unwrap();
@@ -115,6 +117,49 @@ fn streaming_insert() {
     insert.bind_stream(Box::new(batches)).unwrap();
 
     insert.execute_update().unwrap();
+
+    let mut select = conn.new_statement().unwrap();
+    select
+        .set_sql_query(
+            "SELECT \
+         count(*) AS row_count, \
+         first_value(bar) AS min_bar, \
+         first_value(baz) AS min_baz,
+         last_value(bar) AS max_bar, \
+         last_value(baz) AS max_baz \
+         FROM (SELECT * FROM foo ORDER BY bar)",
+        )
+        .unwrap();
+
+    let mut reader = select.execute().unwrap();
+
+    let batch = reader.next().expect("expected one record").unwrap();
+
+    assert!(reader.next().is_none(), "expected only one record");
+    assert_eq!(batch.num_rows(), 1);
+
+    let expected_count = batch_size * num_batches;
+
+    let expected = RecordBatch::try_new(
+        Schema::new(vec![
+            Field::new("row_count", DataType::UInt64, false),
+            Field::new("min_bar", DataType::Int32, false),
+            Field::new("min_baz", DataType::Utf8, false),
+            Field::new("max_bar", DataType::Int32, false),
+            Field::new("max_baz", DataType::Utf8, false),
+        ])
+        .into(),
+        vec![
+            create_array!(UInt64, [expected_count]),
+            create_array!(Int32, [1]),
+            create_array!(Utf8, ["batch_0_bar_1"]),
+            create_array!(Int32, [expected_count as i32]),
+            create_array!(Utf8, ["batch_9_bar_50"]),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(batch, expected);
 }
 
 pub(crate) fn test_driver() -> ClickhouseDriver {
