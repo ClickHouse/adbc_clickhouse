@@ -251,9 +251,10 @@ fn bind_scalar(query: Query, name: &str, array: &dyn Array) -> Result<Query, Err
         // DataType::Float16 => Ok(query.param(name, array.as_primitive::<Float16Type>().value(0))),
         DataType::Float32 => Ok(query.param(name, array.as_primitive::<Float32Type>().value(0))),
         DataType::Float64 => Ok(query.param(name, array.as_primitive::<Float64Type>().value(0))),
-        // FIXME: not sure what to do if `tz` is `None`, as CH doesn't have a concept of "naive" timestamps;
-        // all timestamps are input and output assuming a given timezone,
-        // so this may result in subtly wrong results no matter what
+        // The timezone doesn't really matter because the Arrow format specifies that
+        // it's always in UTC. Because ClickHouse doesn't support the concept of "naive" timestamps
+        // without a time zone, the Arrow format schema advises to treat those as if they were UTC:
+        // https://github.com/apache/arrow/blob/8e13dbc4d37247e3e9f79adfa852f482f10edec0/format/Schema.fbs#L371-L381
         DataType::Timestamp(unit, _tz) => {
             let datetime = match unit {
                 TimeUnit::Second => array
@@ -276,7 +277,9 @@ fn bind_scalar(query: Query, name: &str, array: &dyn Array) -> Result<Query, Err
                 )
             })?;
 
-            Ok(query.param(name, datetime))
+            // Needs to be explicitly serialized as UTC, otherwise it might be assumed to be
+            // in the server's or column's set time zone.
+            Ok(query.param(name, datetime.and_utc()))
         }
         DataType::Date32 => Ok(query.param(
             name,
@@ -468,7 +471,7 @@ fn fetch_blocking(
     query = bind_query(query, bind)?;
 
     let cursor = query.fetch_bytes("ArrowStream").map_err(|e| {
-        Error::with_message_and_status(format!("error executing query: {e:?}"), Status::Internal)
+        Error::with_message_and_status(format!("error executing query: {e}"), Status::Internal)
     })?;
 
     tokio
@@ -491,7 +494,7 @@ fn execute_blocking(
     query = bind_query(query, bind)?;
 
     tokio.block_on(query.execute()).map_err(|e| {
-        Error::with_message_and_status(format!("error executing query: {e:?}"), Status::Internal)
+        Error::with_message_and_status(format!("error executing query: {e}"), Status::Internal)
     })?;
 
     // TODO: parse `X-ClickHouse-Summary` and return rows modified
