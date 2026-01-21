@@ -16,12 +16,12 @@ use arrow_schema::{DataType, Schema, TimeUnit};
 use clickhouse::Client;
 use clickhouse::query::Query;
 
-use crate::Result;
 use crate::writer::ArrowStreamWriter;
+use crate::{Result, TokioContext};
 
 pub struct ClickhouseStatement {
     client: Client,
-    tokio: tokio::runtime::Handle,
+    tokio: TokioContext,
     sql_query: Option<String>,
     bind: Option<BindType>,
 }
@@ -32,7 +32,7 @@ enum BindType {
 }
 
 impl ClickhouseStatement {
-    pub(crate) fn new(client: Client, tokio: tokio::runtime::Handle) -> Self {
+    pub(crate) fn new(client: Client, tokio: TokioContext) -> Self {
         Self {
             client,
             tokio,
@@ -421,7 +421,7 @@ fn bind_scalar(query: Query, name: &str, array: &dyn Array) -> Result<Query, Err
 
 fn execute_streaming_insert(
     client: &Client,
-    tokio: &tokio::runtime::Handle,
+    tokio: &TokioContext,
     sql: &str,
     mut stream: Box<dyn RecordBatchReader + Send>,
 ) -> Result<Option<i64>> {
@@ -458,7 +458,7 @@ fn execute_streaming_insert(
 
 fn fetch_blocking(
     client: &Client,
-    tokio: &tokio::runtime::Handle,
+    tokio: &TokioContext,
     sql: &str,
     bind: Option<BindType>,
 ) -> Result<ArrowStreamReader, Error> {
@@ -475,13 +475,13 @@ fn fetch_blocking(
     })?;
 
     tokio
-        .block_on(ArrowStreamReader::begin(tokio, cursor))
+        .block_on(ArrowStreamReader::begin(tokio.clone(), cursor))
         .map_err(Into::into)
 }
 
 fn execute_blocking(
     client: &Client,
-    tokio: &tokio::runtime::Handle,
+    tokio: &TokioContext,
     sql: &str,
     bind: Option<BindType>,
 ) -> Result<Option<i64>, Error> {

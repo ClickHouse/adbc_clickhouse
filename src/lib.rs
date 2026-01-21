@@ -7,6 +7,8 @@ use arrow_schema::Schema;
 use clickhouse::Client;
 use statement::ClickhouseStatement;
 use std::collections::HashSet;
+use std::sync::Arc;
+use tokio::runtime::RuntimeFlavor;
 use uuid::Uuid;
 
 macro_rules! err_unimplemented {
@@ -34,39 +36,55 @@ mod writer;
 pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub struct ClickhouseDriver {
-    tokio: TokioContext,
+    tokio: Option<TokioContext>,
 }
 
 impl ClickhouseDriver {
     /// Initialize the ClickHouse driver.
     ///
     /// If this is called in the context of [an existing Tokio runtime][tokio::runtime::Handle::try_current],
-    /// then that runtime will be used. Otherwise, a new multithreaded runtime will be started.
-    pub fn init() -> Result<Self, Error> {
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            return Ok(Self {
-                tokio: TokioContext::Handle(handle),
-            });
+    /// then that runtime will be used.
+    ///
+    /// The runtime must be [multi-thread flavor][tokio:::runtime::Builder::new_multi_thread]
+    /// because [tokio::runtime::Handle::block_on] cannot drive a current-thread runtime forward,
+    /// which could result in a deadlock.
+    ///
+    /// Otherwise, a separate [current-thread runtime][tokio::runtime::Builder::new_current_thread]
+    /// will be used for each connection.
+    ///
+    /// If you want to configure your own runtime, use [Self::init_with] instead.
+    pub fn init() -> Self {
+        if let Ok(handle) = tokio::runtime::Handle::try_current()
+            && handle.runtime_flavor() == RuntimeFlavor::MultiThread
+        {
+            return Self {
+                tokio: Some(TokioContext::Handle(handle)),
+            };
         }
 
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| {
-                Error::with_message_and_status(
-                    format!("failed to initialize Tokio runtime: {e:?}"),
-                    Status::Internal,
-                )
-            })?;
-
-        Ok(Self::init_with(rt))
+        Self::init_current_thread()
     }
 
-    /// Initialize the ClickHouse driver, passing ownership of the given [Tokio runtime][tokio::runtime::Runtime].
-    pub fn init_with(rt: tokio::runtime::Runtime) -> Self {
+    /// Initialize the ClickHouse driver using the given [Tokio runtime][tokio::runtime::Runtime].
+    ///
+    /// A [current-thread runtime][tokio::runtime::Builder::new_current_thread] _may_ be passed here
+    /// as [tokio::runtime::Runtime::block_on] can drive it forward.
+    pub fn init_with(rt: Arc<tokio::runtime::Runtime>) -> Self {
         Self {
-            tokio: TokioContext::Runtime(rt),
+            tokio: Some(TokioContext::Runtime(rt)),
         }
+    }
+
+    /// Use a new Tokio [current-thread runtime][tokio::runtime::Builder::new_current_thread]
+    /// for each database connection. This avoids any extra threads being spawned.
+    pub fn init_current_thread() -> Self {
+        Self { tokio: None }
+    }
+}
+
+impl Default for ClickhouseDriver {
+    fn default() -> Self {
+        Self::init()
     }
 }
 
@@ -89,14 +107,14 @@ impl Driver for ClickhouseDriver {
 
         Ok(ClickhouseDatabase {
             client,
-            tokio: self.tokio.handle().clone(),
+            tokio: self.tokio.clone(),
         })
     }
 }
 
 pub struct ClickhouseDatabase {
     client: Client,
-    tokio: tokio::runtime::Handle,
+    tokio: Option<TokioContext>,
 }
 
 impl Database for ClickhouseDatabase {
@@ -115,7 +133,10 @@ impl Database for ClickhouseDatabase {
                 .client
                 .clone()
                 .with_option("session_id", Uuid::new_v4().to_string()),
-            tokio: self.tokio.clone(),
+            tokio: self
+                .tokio
+                .clone()
+                .map_or_else(TokioContext::new_current_thread, Ok)?,
         };
 
         for (key, value) in opts {
@@ -162,7 +183,7 @@ impl Optionable for ClickhouseDatabase {
 
 pub struct ClickhouseConnection {
     client: Client,
-    tokio: tokio::runtime::Handle,
+    tokio: TokioContext,
 }
 
 impl Connection for ClickhouseConnection {
@@ -285,16 +306,38 @@ impl Optionable for ClickhouseConnection {
     }
 }
 
+#[derive(Clone)]
 enum TokioContext {
-    Runtime(tokio::runtime::Runtime),
+    Runtime(Arc<tokio::runtime::Runtime>),
     Handle(tokio::runtime::Handle),
 }
 
 impl TokioContext {
-    fn handle(&self) -> &tokio::runtime::Handle {
+    fn new_current_thread() -> Result<Self> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                Error::with_message_and_status(
+                    format!("error creating Tokio runtime: {e}"),
+                    Status::Internal,
+                )
+            })?;
+
+        Ok(Self::Runtime(Arc::new(rt)))
+    }
+
+    fn enter(&self) -> tokio::runtime::EnterGuard<'_> {
         match self {
-            Self::Runtime(rt) => rt.handle(),
-            Self::Handle(handle) => handle,
+            Self::Runtime(rt) => rt.enter(),
+            Self::Handle(hnd) => hnd.enter(),
+        }
+    }
+
+    fn block_on<F: Future>(&self, f: F) -> F::Output {
+        match self {
+            Self::Runtime(rt) => rt.block_on(f),
+            Self::Handle(hnd) => hnd.block_on(f),
         }
     }
 }

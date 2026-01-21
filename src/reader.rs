@@ -1,3 +1,4 @@
+use crate::TokioContext;
 use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_buffer::Buffer;
 use arrow_ipc::reader::StreamDecoder;
@@ -6,7 +7,7 @@ use clickhouse::query::BytesCursor;
 use std::ops::ControlFlow;
 
 pub(crate) struct ArrowStreamReader {
-    tokio: tokio::runtime::Handle,
+    tokio: TokioContext,
     state: ReaderState,
     schema: SchemaRef,
     first_batch: Option<RecordBatch>,
@@ -20,7 +21,7 @@ struct ReaderState {
 
 impl ArrowStreamReader {
     pub(crate) async fn begin(
-        tokio: &tokio::runtime::Handle,
+        tokio: TokioContext,
         cursor: BytesCursor,
     ) -> Result<Self, ArrowError> {
         // We need to read the schema message so that `RecordBatchReader::schema()` is infallible.
