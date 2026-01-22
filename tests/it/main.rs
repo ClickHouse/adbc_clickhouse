@@ -1,4 +1,3 @@
-use adbc_clickhouse::ClickhouseDriver;
 use adbc_core::options::OptionDatabase;
 use adbc_core::{Connection, Database, Driver, Optionable, Statement};
 use arrow_array::types::Int32Type;
@@ -164,7 +163,8 @@ fn streaming_insert() {
     assert_eq!(batch, expected);
 }
 
-pub(crate) fn test_driver() -> ClickhouseDriver {
+#[cfg(not(feature = "ffi"))]
+pub(crate) fn test_driver() -> adbc_clickhouse::ClickhouseDriver {
     if let Ok(s) = std::env::var("ADBC_CLICKHOUSE_TEST_MULTI_THREAD")
         && s.eq_ignore_ascii_case("1")
     {
@@ -175,8 +175,28 @@ pub(crate) fn test_driver() -> ClickhouseDriver {
             .build()
             .unwrap();
 
-        ClickhouseDriver::init_with(rt.into())
+        adbc_clickhouse::ClickhouseDriver::init_with(rt.into())
     } else {
-        ClickhouseDriver::init()
+        adbc_clickhouse::ClickhouseDriver::init()
+    }
+}
+
+#[cfg(feature = "ffi")]
+pub(crate) fn test_driver() -> adbc_driver_manager::ManagedDriver {
+    use adbc_core::options::AdbcVersion;
+
+    if let Ok(s) = std::env::var("ADBC_CLICKHOUSE_TEST_LOAD_DYNAMIC")
+        && s.eq_ignore_ascii_case("1")
+    {
+        adbc_driver_manager::ManagedDriver::load_dynamic_from_name(
+            "adbc_clickhouse",
+            None,
+            AdbcVersion::V110,
+        )
+        .unwrap()
+    } else {
+        // Explicit coercion required to make this happy
+        let init: adbc_ffi::FFI_AdbcDriverInitFunc = adbc_clickhouse::AdbcClickhouseInit;
+        adbc_driver_manager::ManagedDriver::load_static(&init, AdbcVersion::V110).unwrap()
     }
 }
