@@ -11,6 +11,10 @@ mod get_table_schema;
 
 // NOTE: tests run with the `current-thread` runtime by default.
 // Set `ADBC_CLICKHOUSE_TEST_MULTI_THREAD=1` to test with the `multi-thread` runtime.
+//
+// Tests using `test_driver()` use the FFI when the `ffi` feature is enabled.
+// By default in this mode, the driver is statically linked.
+// To test with dynamic linking, set `ADBC_CLICKHOUSE_TEST_LOAD_DYNAMIC=1`
 #[test]
 fn basic_query() {
     let mut driver = test_driver();
