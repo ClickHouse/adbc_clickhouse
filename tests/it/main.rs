@@ -10,6 +10,8 @@ use std::sync::Arc;
 
 mod get_table_schema;
 
+// NOTE: tests run with the `current-thread` runtime by default.
+// Set `ADBC_CLICKHOUSE_TEST_MULTI_THREAD=1` to test with the `multi-thread` runtime.
 #[test]
 fn basic_query() {
     let mut driver = test_driver();
