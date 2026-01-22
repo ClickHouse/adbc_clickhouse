@@ -10,6 +10,8 @@ use std::sync::Arc;
 
 mod get_table_schema;
 
+// NOTE: tests run with the `current-thread` runtime by default.
+// Set `ADBC_CLICKHOUSE_TEST_MULTI_THREAD=1` to test with the `multi-thread` runtime.
 #[test]
 fn basic_query() {
     let mut driver = test_driver();
@@ -163,12 +165,18 @@ fn streaming_insert() {
 }
 
 pub(crate) fn test_driver() -> ClickhouseDriver {
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        // We don't want to spawn `num_cpus` threads for every test.
-        .worker_threads(1)
-        .enable_all()
-        .build()
-        .unwrap();
+    if let Ok(s) = std::env::var("ADBC_CLICKHOUSE_TEST_MULTI_THREAD")
+        && s.eq_ignore_ascii_case("1")
+    {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            // We don't want to spawn `num_cpus` threads for every test.
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
 
-    ClickhouseDriver::init_with(rt)
+        ClickhouseDriver::init_with(rt.into())
+    } else {
+        ClickhouseDriver::init()
+    }
 }

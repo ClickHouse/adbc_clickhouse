@@ -7,6 +7,8 @@ use arrow_schema::Schema;
 use clickhouse::Client;
 use statement::ClickhouseStatement;
 use std::collections::HashSet;
+use std::sync::Arc;
+use tokio::runtime::{Handle, Runtime, RuntimeFlavor};
 use uuid::Uuid;
 
 macro_rules! err_unimplemented {
@@ -33,40 +35,60 @@ mod writer;
 // so it's hazardous to import directly
 pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
 
+/// ClickHouse ADBC driver implementation.
 pub struct ClickhouseDriver {
-    tokio: TokioContext,
+    tokio: Option<TokioContext>,
 }
 
 impl ClickhouseDriver {
     /// Initialize the ClickHouse driver.
     ///
-    /// If this is called in the context of [an existing Tokio runtime][tokio::runtime::Handle::try_current],
-    /// then that runtime will be used. Otherwise, a new multithreaded runtime will be started.
-    pub fn init() -> Result<Self, Error> {
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            return Ok(Self {
-                tokio: TokioContext::Handle(handle),
-            });
+    /// If this is called in the context of [an existing Tokio `Runtime`][tokio::runtime::Handle::try_current],
+    /// and it is a [a multi-thread runtime][tokio::runtime#multi-threaded-runtime-behavior-at-the-time-of-writing],
+    /// then that runtime will be used for all connections.
+    ///
+    /// Otherwise, a separate [current-thread runtime][tokio::runtime#current-thread-runtime-behavior-at-the-time-of-writing]
+    /// will be used for each connection.
+    ///
+    /// Because Tokio's [`Handle::block_on()`] cannot drive a current-thread runtime forward,
+    /// this method will not use an existing current-thread runtime, since it could result in a
+    /// deadlock if another thread does not call [`Runtime::block_on()`].
+    ///
+    /// If you want to configure your own runtime, use [`Self::init_with()`] instead.
+    pub fn init() -> Self {
+        if let Ok(handle) = Handle::try_current()
+            && handle.runtime_flavor() == RuntimeFlavor::MultiThread
+        {
+            return Self {
+                tokio: Some(TokioContext::Handle(handle)),
+            };
         }
 
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| {
-                Error::with_message_and_status(
-                    format!("failed to initialize Tokio runtime: {e:?}"),
-                    Status::Internal,
-                )
-            })?;
-
-        Ok(Self::init_with(rt))
+        Self::init_current_thread()
     }
 
-    /// Initialize the ClickHouse driver, passing ownership of the given [Tokio runtime][tokio::runtime::Runtime].
-    pub fn init_with(rt: tokio::runtime::Runtime) -> Self {
+    /// Initialize the ClickHouse driver using the given Tokio [`Runtime`],
+    /// which will be shared by all connections.
+    ///
+    /// A [current-thread runtime][tokio::runtime#current-thread-runtime-behavior-at-the-time-of-writing]
+    /// **may** be passed here as [`Runtime::block_on()`] _can_ drive it forward.
+    pub fn init_with(rt: Arc<Runtime>) -> Self {
         Self {
-            tokio: TokioContext::Runtime(rt),
+            tokio: Some(TokioContext::Runtime(rt)),
         }
+    }
+
+    /// Use a new Tokio [current-thread runtime][tokio::runtime#current-thread-runtime-behavior-at-the-time-of-writing]
+    /// for each database connection. This avoids any extra threads being spawned.
+    pub fn init_current_thread() -> Self {
+        Self { tokio: None }
+    }
+}
+
+impl Default for ClickhouseDriver {
+    /// Equivalent to [`ClickhouseDriver::init()`].
+    fn default() -> Self {
+        Self::init()
     }
 }
 
@@ -81,22 +103,26 @@ impl Driver for ClickhouseDriver {
         &mut self,
         opts: impl IntoIterator<Item = (OptionDatabase, OptionValue)>,
     ) -> adbc_core::error::Result<Self::DatabaseType> {
-        let mut client = Client::default();
+        let mut db = ClickhouseDatabase {
+            tokio: self.tokio.clone(),
+            uri: None,
+            username: None,
+            password: None,
+        };
 
         for (key, value) in opts {
-            client = apply_database_option(client, key, value)?;
+            db.set_option(key, value)?;
         }
 
-        Ok(ClickhouseDatabase {
-            client,
-            tokio: self.tokio.handle().clone(),
-        })
+        Ok(db)
     }
 }
 
 pub struct ClickhouseDatabase {
-    client: Client,
-    tokio: tokio::runtime::Handle,
+    tokio: Option<TokioContext>,
+    uri: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
 }
 
 impl Database for ClickhouseDatabase {
@@ -110,13 +136,34 @@ impl Database for ClickhouseDatabase {
         &self,
         opts: impl IntoIterator<Item = (OptionConnection, OptionValue)>,
     ) -> adbc_core::error::Result<Self::ConnectionType> {
-        let mut connection = ClickhouseConnection {
-            client: self
-                .client
-                .clone()
-                .with_option("session_id", Uuid::new_v4().to_string()),
-            tokio: self.tokio.clone(),
+        let tokio = self
+            .tokio
+            .clone()
+            .map_or_else(TokioContext::new_current_thread, Ok)?;
+
+        // It's better to create a new `Client` for each connection because it may error or deadlock
+        // if it tries to hop runtimes in the current-thread case.
+        let mut client = {
+            // In case `Client` calls anything internally.
+            let _guard = tokio.enter();
+
+            // TODO: configure the HTTP client to pool only a single connection (necessary?)
+            Client::default().with_option("session_id", Uuid::new_v4().to_string())
         };
+
+        if let Some(url) = &self.uri {
+            client = client.with_url(url);
+        }
+
+        if let Some(username) = &self.username {
+            client = client.with_user(username);
+        }
+
+        if let Some(password) = &self.password {
+            client = client.with_password(password);
+        }
+
+        let mut connection = ClickhouseConnection { client, tokio };
 
         for (key, value) in opts {
             connection.set_option(key, value)?;
@@ -129,13 +176,49 @@ impl Database for ClickhouseDatabase {
 impl Optionable for ClickhouseDatabase {
     type Option = OptionDatabase;
 
+    // RustRover incorrectly sees `value` as unused because it's captured by the macro
+    //noinspection RsLiveness
     fn set_option(
         &mut self,
         key: Self::Option,
         value: OptionValue,
     ) -> adbc_core::error::Result<()> {
-        // FIXME: `Client` has no way to set options through a mutable reference
-        self.client = apply_database_option(self.client.clone(), key, value)?;
+        macro_rules! try_value {
+            ($variant:ident) => {
+                match value {
+                    OptionValue::$variant(value) => value,
+                    other => {
+                        return Err(Error::with_message_and_status(
+                            format!(
+                                "expected option type {} for database option {:?}, got {other:?}",
+                                stringify!($variant),
+                                key.as_ref()
+                            ),
+                            Status::InvalidArguments,
+                        ))
+                    }
+                }
+            };
+        }
+
+        match key {
+            OptionDatabase::Uri => {
+                self.uri = Some(try_value!(String));
+            }
+            OptionDatabase::Username => {
+                self.username = Some(try_value!(String));
+            }
+            OptionDatabase::Password => {
+                self.password = Some(try_value!(String));
+            }
+            other => {
+                return Err(Error::with_message_and_status(
+                    format!("unknown database option {:?}", other.as_ref()),
+                    Status::InvalidArguments,
+                ));
+            }
+        }
+
         Ok(())
     }
 
@@ -162,7 +245,7 @@ impl Optionable for ClickhouseDatabase {
 
 pub struct ClickhouseConnection {
     client: Client,
-    tokio: tokio::runtime::Handle,
+    tokio: TokioContext,
 }
 
 impl Connection for ClickhouseConnection {
@@ -285,52 +368,38 @@ impl Optionable for ClickhouseConnection {
     }
 }
 
+#[derive(Clone)]
 enum TokioContext {
-    Runtime(tokio::runtime::Runtime),
-    Handle(tokio::runtime::Handle),
+    Runtime(Arc<Runtime>),
+    Handle(Handle),
 }
 
 impl TokioContext {
-    fn handle(&self) -> &tokio::runtime::Handle {
+    fn new_current_thread() -> Result<Self> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                Error::with_message_and_status(
+                    format!("error creating Tokio current-thread runtime: {e}"),
+                    Status::Internal,
+                )
+            })?;
+
+        Ok(Self::Runtime(Arc::new(rt)))
+    }
+
+    fn enter(&self) -> tokio::runtime::EnterGuard<'_> {
         match self {
-            Self::Runtime(rt) => rt.handle(),
-            Self::Handle(handle) => handle,
+            Self::Runtime(rt) => rt.enter(),
+            Self::Handle(hnd) => hnd.enter(),
         }
     }
-}
 
-// RustRover incorrectly sees `value` as unused
-//noinspection RsLiveness
-fn apply_database_option(
-    client: Client,
-    key: OptionDatabase,
-    value: OptionValue,
-) -> Result<Client, Error> {
-    macro_rules! try_value {
-        ($variant:ident) => {
-            match value {
-                OptionValue::$variant(value) => value,
-                other => {
-                    return Err(Error::with_message_and_status(
-                        format!(
-                            "expected option type {} for database option {:?}, got {other:?}",
-                            stringify!($variant),
-                            key.as_ref()
-                        ),
-                        Status::InvalidArguments,
-                    ))
-                }
-            }
-        };
-    }
-
-    match key {
-        OptionDatabase::Uri => Ok(client.with_url(try_value!(String))),
-        OptionDatabase::Username => Ok(client.with_user(try_value!(String))),
-        OptionDatabase::Password => Ok(client.with_password(try_value!(String))),
-        other => Err(Error::with_message_and_status(
-            format!("unknown database option {:?}", other.as_ref()),
-            Status::InvalidArguments,
-        )),
+    fn block_on<F: Future>(&self, f: F) -> F::Output {
+        match self {
+            Self::Runtime(rt) => rt.block_on(f),
+            Self::Handle(hnd) => hnd.block_on(f),
+        }
     }
 }

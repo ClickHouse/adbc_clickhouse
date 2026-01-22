@@ -83,6 +83,11 @@ jobs:
       - name: Run tests with all features
         run: cargo llvm-cov test --workspace --no-report --all-features
 
+      - name: Run tests (multi-thread runtime)
+        env:
+          ADBC_CLICKHOUSE_TEST_MULTI_THREAD: 1
+        run: cargo llvm-cov test --workspace --no-report
+
       # Community PRs won't have access to the secrets
       # even when the workflow run is approved by a maintainer,
       # so we need to skip the Cloud tests in that case.

@@ -1,3 +1,4 @@
+use crate::TokioContext;
 use arrow_array::RecordBatch;
 use arrow_ipc::writer::StreamWriter;
 use arrow_schema::{ArrowError, Schema};
@@ -11,13 +12,13 @@ pub struct ArrowStreamWriter<'a> {
 // We can't use `tokio_util::io::SyncIoBridge` because it won't drive a current-thread runtime
 // https://github.com/ClickHouse/adbc_clickhouse/issues/25
 struct BlockingWriter<'a> {
-    tokio: &'a tokio::runtime::Handle,
+    tokio: &'a TokioContext,
     insert: BufInsertFormatted,
 }
 
 impl<'a> ArrowStreamWriter<'a> {
     pub fn begin(
-        tokio: &'a tokio::runtime::Handle,
+        tokio: &'a TokioContext,
         schema: &Schema,
         insert: InsertFormatted,
     ) -> Result<Self, ArrowError> {
