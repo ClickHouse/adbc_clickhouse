@@ -381,7 +381,7 @@ impl TokioContext {
             .build()
             .map_err(|e| {
                 Error::with_message_and_status(
-                    format!("error creating Tokio runtime: {e}"),
+                    format!("error creating Tokio current-thread runtime: {e}"),
                     Status::Internal,
                 )
             })?;
