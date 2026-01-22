@@ -17,10 +17,10 @@ use clickhouse::Client;
 use clickhouse::query::Query;
 
 use crate::writer::ArrowStreamWriter;
-use crate::{Result, TokioContext};
+use crate::{AugmentedClient, Result, TokioContext, option};
 
 pub struct ClickhouseStatement {
-    client: Client,
+    client: AugmentedClient,
     tokio: TokioContext,
     sql_query: Option<String>,
     bind: Option<BindType>,
@@ -32,7 +32,7 @@ enum BindType {
 }
 
 impl ClickhouseStatement {
-    pub(crate) fn new(client: Client, tokio: TokioContext) -> Self {
+    pub(crate) fn new(client: AugmentedClient, tokio: TokioContext) -> Self {
         Self {
             client,
             tokio,
@@ -138,7 +138,27 @@ impl Optionable for ClickhouseStatement {
         key: Self::Option,
         value: OptionValue,
     ) -> adbc_core::error::Result<()> {
-        err_unimplemented!("ClickhouseStatement::set_option({key:?}, {value:?})")
+        match key {
+            // OptionStatement::IngestMode => {}
+            // OptionStatement::TargetTable => {}
+            // OptionStatement::TargetCatalog => {}
+            // OptionStatement::TargetDbSchema => {}
+            // OptionStatement::Temporary => {}
+            // OptionStatement::Incremental => {}
+            // OptionStatement::Progress => {}
+            // OptionStatement::MaxProgress => {}
+            OptionStatement::Other(s) if s == option::PRODUCT_INFO => {
+                self.client.set_product_info(&value.try_into()?);
+            }
+            other => {
+                return Err(Error::with_message_and_status(
+                    format!("unimplemented connection option: {:?}", other.as_ref()),
+                    Status::NotImplemented,
+                ));
+            }
+        }
+
+        Ok(())
     }
 
     fn get_option_string(&self, key: Self::Option) -> adbc_core::error::Result<String> {

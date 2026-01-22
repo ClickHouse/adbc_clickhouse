@@ -1,3 +1,4 @@
+use crate::option::ProductInfo;
 use crate::reader::ArrowStreamReader;
 use adbc_core::error::{Error, Status};
 use adbc_core::options::{InfoCode, ObjectDepth, OptionConnection, OptionDatabase, OptionValue};
@@ -7,6 +8,7 @@ use arrow_schema::Schema;
 use clickhouse::Client;
 use statement::ClickhouseStatement;
 use std::collections::HashSet;
+use std::ops::Deref;
 use std::sync::Arc;
 use tokio::runtime::{Handle, Runtime, RuntimeFlavor};
 use uuid::Uuid;
@@ -26,6 +28,7 @@ macro_rules! err_unimplemented {
     };
 }
 
+pub mod option;
 mod reader;
 mod schema;
 mod statement;
@@ -41,6 +44,8 @@ adbc_ffi::export_driver!(AdbcClickhouseInit, ClickhouseDriver);
 /// ClickHouse ADBC driver implementation.
 pub struct ClickhouseDriver {
     tokio: Option<TokioContext>,
+    // Empty by default.
+    product_info: ProductInfo,
 }
 
 impl ClickhouseDriver {
@@ -64,6 +69,7 @@ impl ClickhouseDriver {
         {
             return Self {
                 tokio: Some(TokioContext::Handle(handle)),
+                product_info: ProductInfo::default(),
             };
         }
 
@@ -78,13 +84,17 @@ impl ClickhouseDriver {
     pub fn init_with(rt: Arc<Runtime>) -> Self {
         Self {
             tokio: Some(TokioContext::Runtime(rt)),
+            product_info: ProductInfo::default(),
         }
     }
 
     /// Use a new Tokio [current-thread runtime][tokio::runtime#current-thread-runtime-behavior-at-the-time-of-writing]
     /// for each database connection. This avoids any extra threads being spawned.
     pub fn init_current_thread() -> Self {
-        Self { tokio: None }
+        Self {
+            tokio: None,
+            product_info: ProductInfo::default(),
+        }
     }
 }
 
@@ -111,6 +121,7 @@ impl Driver for ClickhouseDriver {
             uri: None,
             username: None,
             password: None,
+            product_info: self.product_info.clone(),
         };
 
         for (key, value) in opts {
@@ -126,6 +137,7 @@ pub struct ClickhouseDatabase {
     uri: Option<String>,
     username: Option<String>,
     password: Option<String>,
+    product_info: ProductInfo,
 }
 
 impl Database for ClickhouseDatabase {
@@ -144,15 +156,16 @@ impl Database for ClickhouseDatabase {
             .clone()
             .map_or_else(TokioContext::new_current_thread, Ok)?;
 
+        // In case `Client` calls anything internally.
+        let tokio_guard = tokio.enter();
+
         // It's better to create a new `Client` for each connection because it may error or deadlock
         // if it tries to hop runtimes in the current-thread case.
-        let mut client = {
-            // In case `Client` calls anything internally.
-            let _guard = tokio.enter();
-
-            // TODO: configure the HTTP client to pool only a single connection (necessary?)
-            Client::default().with_option("session_id", Uuid::new_v4().to_string())
-        };
+        // TODO: configure the HTTP client to pool only a single connection (necessary?)
+        let mut client = Client::default()
+            // Default `product_info` that should always be included
+            .with_product_info("adbc_clickhouse", env!("CARGO_PKG_VERSION"))
+            .with_option("session_id", Uuid::new_v4().to_string());
 
         if let Some(url) = &self.uri {
             client = client.with_url(url);
@@ -166,6 +179,13 @@ impl Database for ClickhouseDatabase {
             client = client.with_password(password);
         }
 
+        drop(tokio_guard);
+
+        let mut client = AugmentedClient::new(client);
+        client.set_product_info(&self.product_info);
+
+        // Note: we don't apply `product_info` at this level in case it's set
+        // to a different value at a lower level
         let mut connection = ClickhouseConnection { client, tokio };
 
         for (key, value) in opts {
@@ -214,6 +234,9 @@ impl Optionable for ClickhouseDatabase {
             OptionDatabase::Password => {
                 self.password = Some(try_value!(String));
             }
+            OptionDatabase::Other(s) if s == option::PRODUCT_INFO => {
+                self.product_info = value.try_into()?;
+            }
             other => {
                 return Err(Error::with_message_and_status(
                     format!("unknown database option {:?}", other.as_ref()),
@@ -247,7 +270,7 @@ impl Optionable for ClickhouseDatabase {
 }
 
 pub struct ClickhouseConnection {
-    client: Client,
+    client: AugmentedClient,
     tokio: TokioContext,
 }
 
@@ -351,7 +374,30 @@ impl Optionable for ClickhouseConnection {
         key: Self::Option,
         value: OptionValue,
     ) -> adbc_core::error::Result<()> {
-        err_unimplemented!("ClickhouseConnection::set_option({key:?}, {value:?})")
+        match key {
+            // OptionConnection::AutoCommit => {}
+            // OptionConnection::ReadOnly => {}
+            // OptionConnection::CurrentCatalog => {}
+            // OptionConnection::CurrentSchema => {}
+            // OptionConnection::IsolationLevel => {}
+            OptionConnection::Other(s) if s == option::PRODUCT_INFO => {
+                self.client.set_product_info(&value.try_into()?);
+            }
+            OptionConnection::Other(other) => {
+                return Err(Error::with_message_and_status(
+                    format!("unknown connection option {other:?}"),
+                    Status::InvalidArguments,
+                ));
+            }
+            other => {
+                return Err(Error::with_message_and_status(
+                    format!("unimplemented connection option: {:?}", other.as_ref()),
+                    Status::NotImplemented,
+                ));
+            }
+        }
+
+        Ok(())
     }
 
     fn get_option_string(&self, key: Self::Option) -> adbc_core::error::Result<String> {
@@ -368,6 +414,44 @@ impl Optionable for ClickhouseConnection {
 
     fn get_option_double(&self, key: Self::Option) -> adbc_core::error::Result<f64> {
         err_unimplemented!("ClickhouseConnection::get_option_double({key:?})")
+    }
+}
+
+#[derive(Clone)]
+struct AugmentedClient {
+    /// `Client` without any additional settings applied (such as product info)
+    original_client: Arc<Client>,
+    // `Client` implements `Clone`, but it's a deep copy
+    modified_client: Option<Arc<Client>>,
+}
+
+impl AugmentedClient {
+    fn new(client: Client) -> Self {
+        Self {
+            original_client: Arc::new(client),
+            modified_client: None,
+        }
+    }
+
+    fn set_product_info(&mut self, product_info: &ProductInfo) {
+        // If we just kept calling `.with_product_info()` on the same client,
+        // it would keep adding to the product info instead of resetting it.
+        self.modified_client = (!product_info.is_empty()).then(|| {
+            product_info
+                .apply(Client::clone(&self.original_client))
+                .into()
+        });
+    }
+}
+
+impl Deref for AugmentedClient {
+    type Target = Client;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        self.modified_client
+            .as_deref()
+            .unwrap_or(&self.original_client)
     }
 }
 
