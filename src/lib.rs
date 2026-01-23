@@ -1,4 +1,4 @@
-use crate::option::ProductInfo;
+use crate::options::ProductInfo;
 use crate::reader::ArrowStreamReader;
 use adbc_core::error::{Error, Status};
 use adbc_core::options::{InfoCode, ObjectDepth, OptionConnection, OptionDatabase, OptionValue};
@@ -28,7 +28,7 @@ macro_rules! err_unimplemented {
     };
 }
 
-pub mod option;
+pub mod options;
 mod reader;
 mod schema;
 mod statement;
@@ -156,7 +156,7 @@ impl Database for ClickhouseDatabase {
             .clone()
             .map_or_else(TokioContext::new_current_thread, Ok)?;
 
-        // In case `Client` calls anything internally.
+        // In case `Client::default()` calls anything internally.
         let tokio_guard = tokio.enter();
 
         // It's better to create a new `Client` for each connection because it may error or deadlock
@@ -164,6 +164,8 @@ impl Database for ClickhouseDatabase {
         // TODO: configure the HTTP client to pool only a single connection (necessary?)
         let mut client = Client::default()
             // Default `product_info` that should always be included
+            // Note: we don't apply `self.product_info` at this level in case it's set
+            // to a different value at a lower level; `AugmentedClient` covers that.
             .with_product_info("adbc_clickhouse", env!("CARGO_PKG_VERSION"))
             .with_option("session_id", Uuid::new_v4().to_string());
 
@@ -179,13 +181,10 @@ impl Database for ClickhouseDatabase {
             client = client.with_password(password);
         }
 
-        drop(tokio_guard);
-
         let mut client = AugmentedClient::new(client);
         client.set_product_info(&self.product_info);
 
-        // Note: we don't apply `product_info` at this level in case it's set
-        // to a different value at a lower level
+        drop(tokio_guard);
         let mut connection = ClickhouseConnection { client, tokio };
 
         for (key, value) in opts {
@@ -234,7 +233,7 @@ impl Optionable for ClickhouseDatabase {
             OptionDatabase::Password => {
                 self.password = Some(try_value!(String));
             }
-            OptionDatabase::Other(s) if s == option::PRODUCT_INFO => {
+            OptionDatabase::Other(s) if s == options::PRODUCT_INFO => {
                 self.product_info = value.try_into()?;
             }
             other => {
@@ -380,7 +379,7 @@ impl Optionable for ClickhouseConnection {
             // OptionConnection::CurrentCatalog => {}
             // OptionConnection::CurrentSchema => {}
             // OptionConnection::IsolationLevel => {}
-            OptionConnection::Other(s) if s == option::PRODUCT_INFO => {
+            OptionConnection::Other(s) if s == options::PRODUCT_INFO => {
                 self.client.set_product_info(&value.try_into()?);
             }
             OptionConnection::Other(other) => {
@@ -417,6 +416,9 @@ impl Optionable for ClickhouseConnection {
     }
 }
 
+/// Wrapper for [`Client`] that implements expected semantics for certain settings.
+///
+/// For example, overwriting `product_info` instead of appending to it.
 #[derive(Clone)]
 struct AugmentedClient {
     /// `Client` without any additional settings applied (such as product info)
@@ -489,4 +491,40 @@ impl TokioContext {
             Self::Handle(hnd) => hnd.block_on(f),
         }
     }
+}
+
+#[test]
+fn test_set_product_info() {
+    let mut driver = ClickhouseDriver::init();
+
+    let db = driver
+        .new_database_with_opts([(
+            options::PRODUCT_INFO.into(),
+            "foo/1.0.0 bar/0.12.34-alpha.1".into(),
+        )])
+        .unwrap();
+
+    assert!(
+        db.product_info
+            .pairs()
+            .eq([("foo", "1.0.0"), ("bar", "0.12.34-alpha.1")])
+    );
+
+    // `clickhouse::Client` doesn't provide any way to read back the product info
+    // so the rest of this test is just ensuring that it _can_ be set
+    let mut conn = db
+        .new_connection_with_opts([(
+            options::PRODUCT_INFO.into(),
+            "foo/2.0.0 bar/1.23.45-beta.1".into(),
+        )])
+        .unwrap();
+
+    // Interestingly, there's no `.new_statement_with_opts()`
+    let mut statement = conn.new_statement().unwrap();
+    statement
+        .set_option(
+            options::PRODUCT_INFO.into(),
+            "foo/3.0.0 bar/2.34.56-rc.1".into(),
+        )
+        .unwrap();
 }

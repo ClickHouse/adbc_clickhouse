@@ -17,7 +17,7 @@ use clickhouse::Client;
 use clickhouse::query::Query;
 
 use crate::writer::ArrowStreamWriter;
-use crate::{AugmentedClient, Result, TokioContext, option};
+use crate::{AugmentedClient, Result, TokioContext, options};
 
 pub struct ClickhouseStatement {
     client: AugmentedClient,
@@ -147,7 +147,7 @@ impl Optionable for ClickhouseStatement {
             // OptionStatement::Incremental => {}
             // OptionStatement::Progress => {}
             // OptionStatement::MaxProgress => {}
-            OptionStatement::Other(s) if s == option::PRODUCT_INFO => {
+            OptionStatement::Other(s) if s == options::PRODUCT_INFO => {
                 self.client.set_product_info(&value.try_into()?);
             }
             other => {

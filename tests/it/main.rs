@@ -1,5 +1,6 @@
+use adbc_clickhouse::{ClickhouseDriver, options};
 use adbc_core::options::OptionDatabase;
-use adbc_core::{Connection, Database, Driver, Optionable, Statement};
+use adbc_core::{Connection, Database, Driver, Statement};
 use arrow_array::types::Int32Type;
 use arrow_array::{
     PrimitiveArray, RecordBatch, RecordBatchIterator, RecordBatchReader, StringArray, create_array,
@@ -19,8 +20,14 @@ mod get_table_schema;
 fn basic_query() {
     let mut driver = test_driver();
 
-    let mut db = driver.new_database().unwrap();
-    db.set_option(OptionDatabase::Uri, "http://localhost:8123/".into())
+    let db = driver
+        .new_database_with_opts([
+            (OptionDatabase::Uri, "http://localhost:8123/".into()),
+            (
+                options::PRODUCT_INFO.into(),
+                format!("adbc_clickhouse_test/{}", env!("CARGO_PKG_VERSION")).into(),
+            ),
+        ])
         .unwrap();
 
     let mut conn = db.new_connection().unwrap();
@@ -66,8 +73,14 @@ fn basic_query() {
 fn streaming_insert() {
     let mut driver = test_driver();
 
-    let mut db = driver.new_database().unwrap();
-    db.set_option(OptionDatabase::Uri, "http://localhost:8123/".into())
+    let db = driver
+        .new_database_with_opts([
+            (OptionDatabase::Uri, "http://localhost:8123/".into()),
+            (
+                options::PRODUCT_INFO.into(),
+                format!("adbc_clickhouse_test/{}", env!("CARGO_PKG_VERSION")).into(),
+            ),
+        ])
         .unwrap();
 
     let mut conn = db.new_connection().unwrap();
