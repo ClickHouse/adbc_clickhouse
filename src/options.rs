@@ -1,6 +1,6 @@
 use adbc_core::error::{Error, Status};
 use adbc_core::options::OptionValue;
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{Display, Formatter};
 use std::ops::Range;
 use std::str::FromStr;
 
@@ -80,7 +80,6 @@ impl ProductInfo {
         self.pair_ranges.is_empty()
     }
 
-    #[cfg_attr(not(test), expect(unused))]
     pub fn pairs(&self) -> impl DoubleEndedIterator<Item = (&'_ str, &'_ str)> + '_ {
         self.pair_ranges
             .iter()
@@ -117,6 +116,11 @@ impl FromStr for ProductInfo {
                 .map_or((s.len(), 0), |(i, spaces)| (i, spaces.len()));
 
             let item = &s[range_start..range_end];
+
+            if item.is_empty() {
+                range_start = range_end + break_len;
+                continue;
+            }
 
             let split_at = item.find('/').ok_or_else(|| {
                 Error::with_message_and_status(
@@ -165,4 +169,64 @@ impl TryFrom<OptionValue> for ProductInfo {
 }
 
 #[test]
-fn test_parse_product_info() {}
+fn test_parse_product_info() {
+    let info = "".parse::<ProductInfo>().unwrap();
+    assert_eq!(&*info.source_str, "");
+    assert_eq!(*info.pair_ranges, []);
+    assert_eq!(info.pairs().collect::<Vec<_>>(), []);
+
+    let info = "my_product/1.0.0".parse::<ProductInfo>().unwrap();
+    assert_eq!(&*info.source_str, "my_product/1.0.0");
+    assert_eq!(*info.pair_ranges, [(0..10, 11..16)]);
+    assert_eq!(info.pairs().collect::<Vec<_>>(), [("my_product", "1.0.0")]);
+
+    let info = "my_service/0.1.0 my_product/1.0.0"
+        .parse::<ProductInfo>()
+        .unwrap();
+    assert_eq!(&*info.source_str, "my_service/0.1.0 my_product/1.0.0");
+    assert_eq!(*info.pair_ranges, [(0..10, 11..16), (17..27, 28..33)]);
+    assert_eq!(
+        info.pairs().collect::<Vec<_>>(),
+        [("my_service", "0.1.0"), ("my_product", "1.0.0")]
+    );
+
+    let info = "my_component/0.1.0-alpha.1 my_service/0.1.0 my_product/1.0.0"
+        .parse::<ProductInfo>()
+        .unwrap();
+    assert_eq!(
+        &*info.source_str,
+        "my_component/0.1.0-alpha.1 my_service/0.1.0 my_product/1.0.0"
+    );
+    assert_eq!(
+        *info.pair_ranges,
+        [(0..12, 13..26), (27..37, 38..43), (44..54, 55..60)]
+    );
+    assert_eq!(
+        info.pairs().collect::<Vec<_>>(),
+        [
+            ("my_component", "0.1.0-alpha.1"),
+            ("my_service", "0.1.0"),
+            ("my_product", "1.0.0")
+        ]
+    );
+
+    // Oops, all whitespace
+    let info = " \t\r\n".parse::<ProductInfo>().unwrap();
+    assert_eq!(&*info.source_str, " \t\r\n");
+    assert_eq!(*info.pair_ranges, []);
+    assert_eq!(info.pairs().collect::<Vec<_>>(), []);
+
+    // Excess whitespace
+    let info = "\t my_service/0.1.0 \t my_product/1.0.0 \t"
+        .parse::<ProductInfo>()
+        .unwrap();
+    assert_eq!(
+        &*info.source_str,
+        "\t my_service/0.1.0 \t my_product/1.0.0 \t"
+    );
+    assert_eq!(*info.pair_ranges, [(2..12, 13..18), (21..31, 32..37)]);
+    assert_eq!(
+        info.pairs().collect::<Vec<_>>(),
+        [("my_service", "0.1.0"), ("my_product", "1.0.0")]
+    );
+}
