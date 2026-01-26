@@ -64,7 +64,7 @@ use std::str::FromStr;
 ///     ],
 /// ).unwrap()
 /// ```
-pub const PRODUCT_INFO: &str = "adbc.clickhouse.sql.client_option.product_info";
+pub const PRODUCT_INFO: &str = "clickhouse.client.product_info";
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ProductInfo {
