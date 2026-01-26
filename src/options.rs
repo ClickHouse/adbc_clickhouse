@@ -169,7 +169,7 @@ impl TryFrom<OptionValue> for ProductInfo {
 }
 
 #[test]
-fn test_parse_product_info() {
+fn test_product_info_from_str() {
     let info = "".parse::<ProductInfo>().unwrap();
     assert_eq!(&*info.source_str, "");
     assert_eq!(*info.pair_ranges, []);
@@ -229,4 +229,25 @@ fn test_parse_product_info() {
         info.pairs().collect::<Vec<_>>(),
         [("my_service", "0.1.0"), ("my_product", "1.0.0")]
     );
+}
+
+#[test]
+fn test_product_info_from_option_value() {
+    let info = ProductInfo::try_from(OptionValue::String(
+        "\t my_service/0.1.0 \t my_product/1.0.0 \t".into(),
+    ))
+    .unwrap();
+    assert_eq!(
+        info.pairs().collect::<Vec<_>>(),
+        [("my_service", "0.1.0"), ("my_product", "1.0.0")]
+    );
+
+    ProductInfo::try_from(OptionValue::Int(12345678)).unwrap_err();
+    ProductInfo::try_from(OptionValue::Double(12345678.90)).unwrap_err();
+
+    // We could possibly support parsing from bytes but that's extra complexity we don't really need.
+    ProductInfo::try_from(OptionValue::Bytes(
+        b"\t my_service/0.1.0 \t my_product/1.0.0 \t".into(),
+    ))
+    .unwrap_err();
 }
