@@ -35,6 +35,9 @@ mod writer;
 // so it's hazardous to import directly
 pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
 
+#[cfg(feature = "ffi")]
+adbc_ffi::export_driver!(AdbcClickhouseInit, ClickhouseDriver);
+
 /// ClickHouse ADBC driver implementation.
 pub struct ClickhouseDriver {
     tokio: Option<TokioContext>,

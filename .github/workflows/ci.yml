@@ -88,6 +88,14 @@ jobs:
           ADBC_CLICKHOUSE_TEST_MULTI_THREAD: 1
         run: cargo llvm-cov test --workspace --no-report
 
+      - name: Run tests (FFI - static)
+        run: cargo llvm-cov test --workspace --no-report --features ffi
+
+      - name: Run tests (FFI - dylib)
+        env:
+          ADBC_CLICKHOUSE_TEST_LOAD_DYNAMIC: 1
+        run: cargo llvm-cov test --workspace --no-report --features ffi
+
       # Community PRs won't have access to the secrets
       # even when the workflow run is approved by a maintainer,
       # so we need to skip the Cloud tests in that case.
