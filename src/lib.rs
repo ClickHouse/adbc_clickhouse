@@ -6,12 +6,12 @@ use adbc_core::{Connection, Database, Driver, Optionable, schemas};
 use arrow_array::{RecordBatchIterator, RecordBatchReader, record_batch};
 use arrow_schema::Schema;
 use clickhouse::Client;
+use rand::distr::{Alphanumeric, SampleString};
 use statement::ClickhouseStatement;
 use std::collections::HashSet;
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::runtime::{Handle, Runtime, RuntimeFlavor};
-use uuid::Uuid;
 
 macro_rules! err_unimplemented {
     ($path:literal) => {
@@ -167,7 +167,7 @@ impl Database for ClickhouseDatabase {
             // Note: we don't apply `self.product_info` at this level in case it's set
             // to a different value at a lower level; `AugmentedClient` covers that.
             .with_product_info("adbc_clickhouse", env!("CARGO_PKG_VERSION"))
-            .with_option("session_id", Uuid::new_v4().to_string());
+            .with_option("session_id", random_id("session"));
 
         if let Some(url) = &self.uri {
             client = client.with_url(url);
@@ -421,7 +421,7 @@ impl Optionable for ClickhouseConnection {
 /// For example, overwriting `product_info` instead of appending to it.
 #[derive(Clone)]
 struct AugmentedClient {
-    /// `Client` without any additional settings applied (such as product info)
+    /// `Client` without `product_info``
     original_client: Arc<Client>,
     // `Client` implements `Clone`, but it's a deep copy
     modified_client: Option<Arc<Client>>,
@@ -443,6 +443,21 @@ impl AugmentedClient {
                 .apply(Client::clone(&self.original_client))
                 .into()
         });
+    }
+
+    fn set_query_id(&mut self, query_id: String) {
+        if let Some(modified_client) = &mut self.modified_client {
+            Arc::make_mut(modified_client).set_option("query_id", &query_id);
+        }
+
+        Arc::make_mut(&mut self.original_client).set_option("query_id", query_id);
+    }
+
+    fn get_query_id(&self) -> Option<&str> {
+        self.modified_client
+            .as_deref()
+            .unwrap_or(&self.original_client)
+            .get_option("query_id")
     }
 }
 
@@ -491,6 +506,16 @@ impl TokioContext {
             Self::Handle(hnd) => hnd.block_on(f),
         }
     }
+}
+
+pub(crate) fn random_id(namespace: &str) -> String {
+    let mut out = format!("{namespace}_");
+
+    // Controversial opinion: magic constants are fine if they only appear in one obvious context.
+    // Extracting the length to a constant would only add indirection and obscure the intent.
+    Alphanumeric.append_string(&mut rand::rng(), &mut out, 16);
+
+    out
 }
 
 #[test]

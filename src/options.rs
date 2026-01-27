@@ -26,10 +26,10 @@ use std::str::FromStr;
 /// ```rust
 /// use adbc_clickhouse::ClickhouseDriver;
 ///
-/// use adbc_core::{Driver, Database, Connection, Statement};
+/// use adbc_core::{Driver, Database, Connection, Statement, Optionable};
 /// use adbc_core::options::OptionDatabase;
 ///
-/// let driver = ClickhouseDriver::init();
+/// let mut driver = ClickhouseDriver::init();
 ///
 /// let db = driver.new_database_with_opts(
 ///     [
@@ -52,19 +52,63 @@ use std::str::FromStr;
 ///             "my_service/0.1.0 my_product/1.0.0".into(),
 ///         ),
 ///     ],
-/// ).unwrap()
+/// ).unwrap();
 ///
-/// let statement = db.new_statement_with_opts(
-///     [
-///         // Set the product info for this `Statement` only.
-///         (
-///             adbc_clickhouse::options::PRODUCT_INFO.into(),
-///             "my_component/0.1.0-alpha.1 my_service/0.1.0 my_product/1.0.0".into(),
-///         ),
-///     ],
-/// ).unwrap()
+/// let mut statement = conn.new_statement().unwrap();
+///
+/// // Set the product info for this `Statement` only.
+/// statement.set_option(
+///     adbc_clickhouse::options::PRODUCT_INFO.into(),
+///     "my_component/0.1.0-alpha.1 my_service/0.1.0 my_product/1.0.0".into(),
+/// ).unwrap();
 /// ```
 pub const PRODUCT_INFO: &str = "clickhouse.client.product_info";
+
+/// ID string for the current query for explicit cancellation and identification in query logs.
+///
+/// Only supported on `ClickhouseStatement`.
+///
+/// An ID is pre-generated when the statement is created, which can be read back for later reference.
+///
+/// # Example
+///
+/// Get the pre-generated query ID:
+/// ```rust
+/// use adbc_clickhouse::ClickhouseDriver;
+///
+/// use adbc_core::{Driver, Database, Connection, Statement, Optionable};
+///
+/// let driver = ClickhouseDriver::init();
+///
+/// let db = driver.new_database().unwrap();
+/// let mut conn = db.new_connection().unwrap();
+///
+/// let statement = conn.new_statement().unwrap();
+///
+/// let query_id = statement.get_option_string(adbc_clickhouse::options::QUERY_ID.into()).unwrap();
+/// println!("query ID: {query_id}");
+/// ```
+///
+/// Explicitly set a query ID:
+/// ```rust
+/// use adbc_clickhouse::ClickhouseDriver;
+///
+/// use adbc_core::{Driver, Database, Connection, Statement, Optionable};
+///
+/// let mut driver = ClickhouseDriver::init();
+///
+/// let db = driver.new_database().unwrap();
+/// let mut conn = db.new_connection().unwrap();
+///
+/// let mut statement = conn.new_statement().unwrap();
+///
+/// statement.set_option(adbc_clickhouse::options::QUERY_ID.into(), "asdf1234".into()).unwrap();
+///
+/// let query_id = statement.get_option_string(adbc_clickhouse::options::QUERY_ID.into()).unwrap();
+///
+/// assert_eq!(query_id, "asdf1234");
+/// ```
+pub const QUERY_ID: &str = "clickhouse.client.query_id";
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ProductInfo {
