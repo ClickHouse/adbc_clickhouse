@@ -545,7 +545,7 @@ fn test_set_product_info() {
         )])
         .unwrap();
 
-    // Interestingly, there's no `.new_statement_with_opts()`
+    // FIXME: https://github.com/apache/arrow-adbc/issues/3913
     let mut statement = conn.new_statement().unwrap();
     statement
         .set_option(

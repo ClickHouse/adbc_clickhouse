@@ -189,7 +189,6 @@ fn query_with_product_info() {
         // Unique query string we can search for
         let query = "SELECT 'adbc_clickhouse/tests/query_with_product_info'";
         statement.set_sql_query(query).unwrap();
-        // We just want to execute the query, don't care about the result
 
         let mut records = statement.execute().unwrap();
 
@@ -223,12 +222,17 @@ fn query_with_product_info() {
             .unwrap();
         statement.execute_update().unwrap();
 
-        statement.set_sql_query(
-            "SELECT query, http_user_agent FROM system.query_log WHERE query_id = {query_id:String} ORDER BY event_time DESC"
-        ).unwrap();
+        statement
+            .set_sql_query(
+                "SELECT query, http_user_agent \
+             FROM system.query_log \
+             WHERE query = {query:String} AND query_id = {query_id:String} \
+             ORDER BY event_time DESC",
+            )
+            .unwrap();
 
         statement
-            .bind(record_batch!(("query_id", Utf8, [query_id])).unwrap())
+            .bind(record_batch!(("query", Utf8, [query]), ("query_id", Utf8, [query_id])).unwrap())
             .unwrap();
 
         let mut records = statement.execute().unwrap();
@@ -237,15 +241,6 @@ fn query_with_product_info() {
             .next()
             .expect("BUG: expected one `RecordBatch`, got none")
             .unwrap();
-
-        assert_eq!(
-            record
-                .column_by_name("query")
-                .unwrap()
-                .as_string::<i32>()
-                .value(0),
-            query
-        );
 
         record
             .column_by_name("http_user_agent")
@@ -268,11 +263,53 @@ fn query_with_product_info() {
 
     let mut conn = db.new_connection().unwrap();
 
+    // Product info should be inherited by the connection
     let user_agent = query_user_agent_string(conn.new_statement().unwrap());
-
     assert!(
         user_agent.starts_with(&db_product_info),
         "expected User-Agent string {user_agent:?} to contain {db_product_info:?}"
+    );
+
+    let conn_product_info = format!("test_conn/0.0.0 {db_product_info}");
+    conn.set_option(options::PRODUCT_INFO.into(), conn_product_info[..].into())
+        .unwrap();
+
+    // The connection should have its own product_info, of course.
+    let user_agent = query_user_agent_string(conn.new_statement().unwrap());
+    assert!(
+        user_agent.starts_with(&conn_product_info),
+        "expected User-Agent string {user_agent:?} to contain {conn_product_info:?}"
+    );
+
+    // A different connection should inherit the product_info of the database
+    let user_agent = query_user_agent_string(db.new_connection().unwrap().new_statement().unwrap());
+    assert!(
+        user_agent.starts_with(&db_product_info),
+        "expected User-Agent string {user_agent:?} to contain {db_product_info:?}"
+    );
+
+    let statement_product_info = format!("test_statement/0.0.1-alpha.1 {conn_product_info}");
+
+    let mut statement = conn.new_statement().unwrap();
+    // FIXME: https://github.com/apache/arrow-adbc/issues/3913
+    statement
+        .set_option(
+            options::PRODUCT_INFO.into(),
+            statement_product_info[..].into(),
+        )
+        .unwrap();
+
+    let user_agent = query_user_agent_string(statement);
+    assert!(
+        user_agent.starts_with(&statement_product_info),
+        "expected User-Agent string {user_agent:?} to contain {statement_product_info:?}"
+    );
+
+    // A different statement should inherit the product_info of the connection
+    let user_agent = query_user_agent_string(conn.new_statement().unwrap());
+    assert!(
+        user_agent.starts_with(&conn_product_info),
+        "expected User-Agent string {user_agent:?} to contain {conn_product_info:?}"
     );
 }
 
