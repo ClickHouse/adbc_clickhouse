@@ -1,9 +1,11 @@
-use adbc_clickhouse::{ClickhouseDriver, options};
-use adbc_core::options::OptionDatabase;
-use adbc_core::{Connection, Database, Driver, Statement};
+use adbc_clickhouse::options;
+use adbc_core::options::{OptionDatabase, OptionStatement};
+use adbc_core::{Connection, Database, Driver, Optionable, Statement};
+use arrow_array::cast::AsArray;
 use arrow_array::types::Int32Type;
 use arrow_array::{
     PrimitiveArray, RecordBatch, RecordBatchIterator, RecordBatchReader, StringArray, create_array,
+    record_batch,
 };
 use arrow_schema::{DataType, Field, Schema};
 use std::sync::Arc;
@@ -178,6 +180,100 @@ fn streaming_insert() {
     .unwrap();
 
     assert_eq!(batch, expected);
+}
+
+#[test]
+fn query_with_product_info() {
+    // Note: may be `ManagedStatement` if using the `ffi` feature.
+    fn query_user_agent_string(mut statement: impl Statement<Option = OptionStatement>) -> String {
+        // Unique query string we can search for
+        let query = "SELECT 'adbc_clickhouse/tests/query_with_product_info'";
+        statement.set_sql_query(query).unwrap();
+        // We just want to execute the query, don't care about the result
+
+        let mut records = statement.execute().unwrap();
+
+        let record = records
+            .next()
+            .expect("BUG: expected one `RecordBatch`, got none")
+            .unwrap();
+
+        assert_eq!(
+            record.column(0).as_string::<i32>().value(0),
+            "adbc_clickhouse/tests/query_with_product_info"
+        );
+
+        drop(records);
+
+        let query_id = statement
+            .get_option_string(options::QUERY_ID.into())
+            .unwrap();
+
+        // Overwrite the query ID to avoid confusion.
+        statement
+            .set_option(
+                options::QUERY_ID.into(),
+                format!("adbc_clickhouse_test_query_{}", rand::random::<u64>()).into(),
+            )
+            .unwrap();
+
+        // Flush the query logs or else it won't appear
+        statement
+            .set_sql_query("SYSTEM FLUSH LOGS query_log")
+            .unwrap();
+        statement.execute_update().unwrap();
+
+        statement.set_sql_query(
+            "SELECT query, http_user_agent FROM system.query_log WHERE query_id = {query_id:String} ORDER BY event_time DESC"
+        ).unwrap();
+
+        statement
+            .bind(record_batch!(("query_id", Utf8, [query_id])).unwrap())
+            .unwrap();
+
+        let mut records = statement.execute().unwrap();
+
+        let record = records
+            .next()
+            .expect("BUG: expected one `RecordBatch`, got none")
+            .unwrap();
+
+        assert_eq!(
+            record
+                .column_by_name("query")
+                .unwrap()
+                .as_string::<i32>()
+                .value(0),
+            query
+        );
+
+        record
+            .column_by_name("http_user_agent")
+            .unwrap()
+            .as_string::<i32>()
+            .value(0)
+            .into()
+    }
+
+    let mut driver = test_driver();
+
+    let db_product_info = format!("adbc_clickhouse_test/{}", env!("CARGO_PKG_VERSION"));
+
+    let db = driver
+        .new_database_with_opts([
+            (OptionDatabase::Uri, "http://localhost:8123/".into()),
+            (options::PRODUCT_INFO.into(), db_product_info[..].into()),
+        ])
+        .unwrap();
+
+    let mut conn = db.new_connection().unwrap();
+
+    let user_agent = query_user_agent_string(conn.new_statement().unwrap());
+
+    assert!(
+        user_agent.starts_with(&db_product_info),
+        "expected User-Agent string {user_agent:?} to contain {db_product_info:?}"
+    );
 }
 
 #[cfg(not(feature = "ffi"))]
