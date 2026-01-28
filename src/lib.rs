@@ -7,7 +7,6 @@ use arrow_array::{RecordBatchIterator, RecordBatchReader, record_batch};
 use arrow_schema::Schema;
 use clickhouse::Client;
 use rand::distr::{Alphanumeric, SampleString};
-use statement::ClickhouseStatement;
 use std::collections::HashSet;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -40,6 +39,8 @@ pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[cfg(feature = "ffi")]
 adbc_ffi::export_driver!(AdbcClickhouseInit, ClickhouseDriver);
+
+pub use statement::ClickhouseStatement;
 
 /// ClickHouse ADBC driver implementation.
 pub struct ClickhouseDriver {
