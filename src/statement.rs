@@ -17,10 +17,10 @@ use clickhouse::Client;
 use clickhouse::query::Query;
 
 use crate::writer::ArrowStreamWriter;
-use crate::{Result, TokioContext};
+use crate::{AugmentedClient, Result, TokioContext, options, random_id};
 
 pub struct ClickhouseStatement {
-    client: Client,
+    client: AugmentedClient,
     tokio: TokioContext,
     sql_query: Option<String>,
     bind: Option<BindType>,
@@ -32,7 +32,9 @@ enum BindType {
 }
 
 impl ClickhouseStatement {
-    pub(crate) fn new(client: Client, tokio: TokioContext) -> Self {
+    pub(crate) fn new(mut client: AugmentedClient, tokio: TokioContext) -> Self {
+        client.set_query_id(random_id("query"));
+
         Self {
             client,
             tokio,
@@ -138,11 +140,58 @@ impl Optionable for ClickhouseStatement {
         key: Self::Option,
         value: OptionValue,
     ) -> adbc_core::error::Result<()> {
-        err_unimplemented!("ClickhouseStatement::set_option({key:?}, {value:?})")
+        match key {
+            // OptionStatement::IngestMode => {}
+            // OptionStatement::TargetTable => {}
+            // OptionStatement::TargetCatalog => {}
+            // OptionStatement::TargetDbSchema => {}
+            // OptionStatement::Temporary => {}
+            // OptionStatement::Incremental => {}
+            // OptionStatement::Progress => {}
+            // OptionStatement::MaxProgress => {}
+            OptionStatement::Other(s) if s == options::PRODUCT_INFO => {
+                self.client.set_product_info(&value.try_into()?);
+            }
+            OptionStatement::Other(s) if s == options::QUERY_ID => match value {
+                OptionValue::String(s) => {
+                    self.client.set_query_id(s);
+                }
+                other => {
+                    return Err(Error::with_message_and_status(
+                        format!("expected string for option {s:?}, got {other:?}"),
+                        Status::InvalidArguments,
+                    ));
+                }
+            },
+            other => {
+                return Err(Error::with_message_and_status(
+                    format!("unimplemented connection option: {:?}", other.as_ref()),
+                    Status::NotImplemented,
+                ));
+            }
+        }
+
+        Ok(())
     }
 
     fn get_option_string(&self, key: Self::Option) -> adbc_core::error::Result<String> {
-        err_unimplemented!("ClickhouseStatement::get_option_string({key:?})")
+        match key {
+            // OptionStatement::IngestMode => {}
+            // OptionStatement::TargetTable => {}
+            // OptionStatement::TargetCatalog => {}
+            // OptionStatement::TargetDbSchema => {}
+            // OptionStatement::Temporary => {}
+            // OptionStatement::Incremental => {}
+            // OptionStatement::Progress => {}
+            // OptionStatement::MaxProgress => {}
+            OptionStatement::Other(s) if s == options::QUERY_ID => {
+                Ok(self.client.get_query_id().unwrap_or("").into())
+            }
+            other => Err(Error::with_message_and_status(
+                format!("unimplemented connection option: {:?}", other.as_ref()),
+                Status::NotImplemented,
+            )),
+        }
     }
 
     fn get_option_bytes(&self, key: Self::Option) -> adbc_core::error::Result<Vec<u8>> {

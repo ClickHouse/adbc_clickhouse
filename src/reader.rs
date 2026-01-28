@@ -31,29 +31,23 @@ impl ArrowStreamReader {
             buffer: None,
         };
 
-        let mut first_batch = None;
-
-        let schema = loop {
-            if let Some(schema) = state.decoder.schema() {
-                break schema;
-            }
-
-            if first_batch.is_some() {
-                return Err(ArrowError::SchemaError(
-                    "received first RecordBatch before receiving Schema".into(),
-                ));
-            }
-
+        let (schema, first_batch) = loop {
             match state.try_read_batch().await? {
-                ControlFlow::Break(Some(batch)) => {
-                    first_batch = Some(batch);
-                }
-                ControlFlow::Break(None) => {
+                ControlFlow::Break(first_batch) => {
+                    // The schema should be populated.
+                    if let Some(schema) = state.decoder.schema() {
+                        break (schema, first_batch);
+                    }
+
                     return Err(ArrowError::SchemaError(
                         "response stream ended before receiving Schema".into(),
                     ));
                 }
-                ControlFlow::Continue(()) => (),
+                ControlFlow::Continue(()) => {
+                    if let Some(schema) = state.decoder.schema() {
+                        break (schema, None);
+                    }
+                }
             }
         };
 

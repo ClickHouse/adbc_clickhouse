@@ -1,8 +1,11 @@
-use adbc_core::options::OptionDatabase;
+use adbc_clickhouse::options;
+use adbc_core::options::{OptionDatabase, OptionStatement};
 use adbc_core::{Connection, Database, Driver, Optionable, Statement};
+use arrow_array::cast::AsArray;
 use arrow_array::types::Int32Type;
 use arrow_array::{
     PrimitiveArray, RecordBatch, RecordBatchIterator, RecordBatchReader, StringArray, create_array,
+    record_batch,
 };
 use arrow_schema::{DataType, Field, Schema};
 use std::sync::Arc;
@@ -19,8 +22,14 @@ mod get_table_schema;
 fn basic_query() {
     let mut driver = test_driver();
 
-    let mut db = driver.new_database().unwrap();
-    db.set_option(OptionDatabase::Uri, "http://localhost:8123/".into())
+    let db = driver
+        .new_database_with_opts([
+            (OptionDatabase::Uri, "http://localhost:8123/".into()),
+            (
+                options::PRODUCT_INFO.into(),
+                format!("adbc_clickhouse_test/{}", env!("CARGO_PKG_VERSION")).into(),
+            ),
+        ])
         .unwrap();
 
     let mut conn = db.new_connection().unwrap();
@@ -66,8 +75,14 @@ fn basic_query() {
 fn streaming_insert() {
     let mut driver = test_driver();
 
-    let mut db = driver.new_database().unwrap();
-    db.set_option(OptionDatabase::Uri, "http://localhost:8123/".into())
+    let db = driver
+        .new_database_with_opts([
+            (OptionDatabase::Uri, "http://localhost:8123/".into()),
+            (
+                options::PRODUCT_INFO.into(),
+                format!("adbc_clickhouse_test/{}", env!("CARGO_PKG_VERSION")).into(),
+            ),
+        ])
         .unwrap();
 
     let mut conn = db.new_connection().unwrap();
@@ -165,6 +180,137 @@ fn streaming_insert() {
     .unwrap();
 
     assert_eq!(batch, expected);
+}
+
+#[test]
+fn query_with_product_info() {
+    // Note: may be `ManagedStatement` if using the `ffi` feature.
+    fn query_user_agent_string(mut statement: impl Statement<Option = OptionStatement>) -> String {
+        // Unique query string we can search for
+        let query = "SELECT 'adbc_clickhouse/tests/query_with_product_info'";
+        statement.set_sql_query(query).unwrap();
+
+        let mut records = statement.execute().unwrap();
+
+        let record = records
+            .next()
+            .expect("BUG: expected one `RecordBatch`, got none")
+            .unwrap();
+
+        assert_eq!(
+            record.column(0).as_string::<i32>().value(0),
+            "adbc_clickhouse/tests/query_with_product_info"
+        );
+
+        drop(records);
+
+        let query_id = statement
+            .get_option_string(options::QUERY_ID.into())
+            .unwrap();
+
+        // Overwrite the query ID to avoid confusion.
+        statement
+            .set_option(
+                options::QUERY_ID.into(),
+                format!("adbc_clickhouse_test_query_{}", rand::random::<u64>()).into(),
+            )
+            .unwrap();
+
+        // Flush the query logs or else it won't appear
+        statement
+            .set_sql_query("SYSTEM FLUSH LOGS query_log")
+            .unwrap();
+        statement.execute_update().unwrap();
+
+        statement
+            .set_sql_query(
+                "SELECT query, http_user_agent \
+             FROM system.query_log \
+             WHERE query = {query:String} AND query_id = {query_id:String} \
+             ORDER BY event_time DESC",
+            )
+            .unwrap();
+
+        statement
+            .bind(record_batch!(("query", Utf8, [query]), ("query_id", Utf8, [query_id])).unwrap())
+            .unwrap();
+
+        let mut records = statement.execute().unwrap();
+
+        let record = records
+            .next()
+            .expect("BUG: expected one `RecordBatch`, got none")
+            .unwrap();
+
+        record
+            .column_by_name("http_user_agent")
+            .unwrap()
+            .as_string::<i32>()
+            .value(0)
+            .into()
+    }
+
+    let mut driver = test_driver();
+
+    let db_product_info = format!("adbc_clickhouse_test/{}", env!("CARGO_PKG_VERSION"));
+
+    let db = driver
+        .new_database_with_opts([
+            (OptionDatabase::Uri, "http://localhost:8123/".into()),
+            (options::PRODUCT_INFO.into(), db_product_info[..].into()),
+        ])
+        .unwrap();
+
+    let mut conn = db.new_connection().unwrap();
+
+    // Product info should be inherited by the connection
+    let user_agent = query_user_agent_string(conn.new_statement().unwrap());
+    assert!(
+        user_agent.starts_with(&db_product_info),
+        "expected User-Agent string {user_agent:?} to contain {db_product_info:?}"
+    );
+
+    let conn_product_info = format!("test_conn/0.0.0 {db_product_info}");
+    conn.set_option(options::PRODUCT_INFO.into(), conn_product_info[..].into())
+        .unwrap();
+
+    // The connection should have its own product_info, of course.
+    let user_agent = query_user_agent_string(conn.new_statement().unwrap());
+    assert!(
+        user_agent.starts_with(&conn_product_info),
+        "expected User-Agent string {user_agent:?} to contain {conn_product_info:?}"
+    );
+
+    // A different connection should inherit the product_info of the database
+    let user_agent = query_user_agent_string(db.new_connection().unwrap().new_statement().unwrap());
+    assert!(
+        user_agent.starts_with(&db_product_info),
+        "expected User-Agent string {user_agent:?} to contain {db_product_info:?}"
+    );
+
+    let statement_product_info = format!("test_statement/0.0.1-alpha.1 {conn_product_info}");
+
+    let mut statement = conn.new_statement().unwrap();
+    // FIXME: https://github.com/apache/arrow-adbc/issues/3913
+    statement
+        .set_option(
+            options::PRODUCT_INFO.into(),
+            statement_product_info[..].into(),
+        )
+        .unwrap();
+
+    let user_agent = query_user_agent_string(statement);
+    assert!(
+        user_agent.starts_with(&statement_product_info),
+        "expected User-Agent string {user_agent:?} to contain {statement_product_info:?}"
+    );
+
+    // A different statement should inherit the product_info of the connection
+    let user_agent = query_user_agent_string(conn.new_statement().unwrap());
+    assert!(
+        user_agent.starts_with(&conn_product_info),
+        "expected User-Agent string {user_agent:?} to contain {conn_product_info:?}"
+    );
 }
 
 #[cfg(not(feature = "ffi"))]
