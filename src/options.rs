@@ -1,13 +1,21 @@
+//! Keys for setting options on various ClickHouse ADBC objects.
+
 use adbc_core::error::{Error, Status};
 use adbc_core::options::OptionValue;
 use std::fmt::{Display, Formatter};
 use std::ops::Range;
 use std::str::FromStr;
 
+#[cfg(doc)]
+use adbc_core::{Database, Optionable};
+
 /// Product info string to include in ClickHouse API calls.
 ///
 /// This will be added to the `User-Agent` header when invoking the ClickHouse HTTP API,
-/// which is useful for metrics.
+/// which is useful for identification in query logs
+/// (`http_user_agent` in the [`system.query_log`] view) and capture of metrics.
+///
+/// [`system.query_log`]: https://clickhouse.com/docs/operations/system-tables/query_log#columns
 ///
 /// The expected format of the string is `<product name>/<product version>`
 /// with multiple product name/version pairs separated by spaces.
@@ -63,6 +71,23 @@ use std::str::FromStr;
 /// ).unwrap();
 /// ```
 pub const PRODUCT_INFO: &str = "clickhouse.client.product_info";
+
+/// Session ID string to use with the [ClickHouse HTTP interface][http-session_id].
+///
+/// This session ID is used to persist any shared state between statements, such as [settings]
+/// and [temporary tables]. By default, session state persists for 60 seconds.
+///
+/// May be set on `ClickhouseConnection` or `ClickhouseStatement`.
+///
+/// When a `ClickhouseConnection` is created, a random session ID is generated if one is not passed
+/// in via [`Database::new_connection_with_opts()`].
+///
+/// It may be read back with [`Optionable::get_option_string()`].
+///
+/// [http-session_id]: https://clickhouse.com/docs/interfaces/http#using-clickhouse-sessions-in-the-http-protocol
+/// [settings]: https://clickhouse.com/docs/sql-reference/statements/set
+/// [temporary tables]: https://clickhouse.com/docs/sql-reference/statements/create/table#temporary-tables
+pub const SESSION_ID: &str = "clickhouse.client.session_id";
 
 /// ID string for the current query for explicit cancellation and identification in query logs.
 ///
@@ -202,12 +227,26 @@ impl TryFrom<OptionValue> for ProductInfo {
     type Error = Error;
 
     fn try_from(value: OptionValue) -> Result<Self, Self::Error> {
-        match value {
-            OptionValue::String(s) => s.parse(),
-            other => Err(Error::with_message_and_status(
-                format!("option {PRODUCT_INFO:?} must be a string; got: {other:?}"),
+        value.try_string(PRODUCT_INFO)?.parse()
+    }
+}
+
+pub(crate) trait OptionValueExt {
+    fn try_string(self, key: impl AsRef<str>) -> Result<String, Error>;
+}
+
+impl OptionValueExt for OptionValue {
+    fn try_string(self, key: impl AsRef<str>) -> Result<String, Error> {
+        if let Self::String(s) = self {
+            Ok(s)
+        } else {
+            Err(Error::with_message_and_status(
+                format!(
+                    "expected string for option {:?}, got {self:?}",
+                    key.as_ref()
+                ),
                 Status::InvalidArguments,
-            )),
+            ))
         }
     }
 }
