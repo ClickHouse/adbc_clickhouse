@@ -1,4 +1,10 @@
-use crate::options::ProductInfo;
+//! Official ClickHouse driver for [Arrow Database Connectivity (ADBC)][adbc-home]
+//!
+//! Utilizes the [official ClickHouse Rust client][clickhouse-rs].
+//!
+//! [adbc-home]: https://arrow.apache.org/adbc/current/index.html
+//! [clickhouse-rs]: https://github.com/ClickHouse/clickhouse-rs
+use crate::options::{OptionValueExt, ProductInfo};
 use crate::reader::ArrowStreamReader;
 use adbc_core::error::{Error, Status};
 use adbc_core::options::{InfoCode, ObjectDepth, OptionConnection, OptionDatabase, OptionValue};
@@ -42,7 +48,22 @@ adbc_ffi::export_driver!(AdbcClickhouseInit, ClickhouseDriver);
 
 pub use statement::ClickhouseStatement;
 
-/// ClickHouse ADBC driver implementation.
+/// ClickHouse ADBC [`Driver`] implementation.
+///
+/// # Note: Tokio Runtime
+/// This driver is built on the [official ClickHouse Rust client][clickhouse-rs],
+/// which is an async-native library built on the [Tokio async runtime][tokio].
+///
+/// To adapt this to a synchronous API, this library uses [`Runtime::block_on()`], or
+/// [`Handle::block_on()`] depending on how it was constructed (see [`Self::init()`] for details).
+///
+/// When loaded dynamically by an [ADBC driver manager][driver-mgr],
+/// this driver defaults to using a new [current-thread runtime] for each connection,
+/// which does not spawn any additional threads.
+///
+/// [clickhouse-rs]: https://github.com/ClickHouse/clickhouse-rs
+/// [tokio]: https://tokio.rs/tokio/tutorial
+/// [driver-mgr]: https://arrow.apache.org/adbc/current/format/how_manager.html
 pub struct ClickhouseDriver {
     tokio: Option<TokioContext>,
     // Empty by default.
@@ -133,6 +154,9 @@ impl Driver for ClickhouseDriver {
     }
 }
 
+/// ClickHouse ADBC [`Database`] implementation.
+///
+///
 pub struct ClickhouseDatabase {
     tokio: Option<TokioContext>,
     uri: Option<String>,
@@ -199,48 +223,28 @@ impl Database for ClickhouseDatabase {
 impl Optionable for ClickhouseDatabase {
     type Option = OptionDatabase;
 
-    // RustRover incorrectly sees `value` as unused because it's captured by the macro
-    //noinspection RsLiveness
     fn set_option(
         &mut self,
         key: Self::Option,
         value: OptionValue,
     ) -> adbc_core::error::Result<()> {
-        macro_rules! try_value {
-            ($variant:ident) => {
-                match value {
-                    OptionValue::$variant(value) => value,
-                    other => {
-                        return Err(Error::with_message_and_status(
-                            format!(
-                                "expected option type {} for database option {:?}, got {other:?}",
-                                stringify!($variant),
-                                key.as_ref()
-                            ),
-                            Status::InvalidArguments,
-                        ))
-                    }
-                }
-            };
-        }
-
         match key {
             OptionDatabase::Uri => {
-                self.uri = Some(try_value!(String));
+                self.uri = Some(value.try_string(key)?);
             }
             OptionDatabase::Username => {
-                self.username = Some(try_value!(String));
+                self.username = Some(value.try_string(key)?);
             }
             OptionDatabase::Password => {
-                self.password = Some(try_value!(String));
+                self.password = Some(value.try_string(key)?);
             }
-            OptionDatabase::Other(s) if s == options::PRODUCT_INFO => {
-                self.product_info = value.try_into()?;
+            OptionDatabase::Other(s) => {
+                self.set_custom_option(&s, value)?;
             }
             other => {
                 return Err(Error::with_message_and_status(
-                    format!("unknown database option {:?}", other.as_ref()),
-                    Status::InvalidArguments,
+                    format!("unimplemented database option {:?}", other.as_ref()),
+                    Status::NotImplemented,
                 ));
             }
         }
@@ -269,6 +273,25 @@ impl Optionable for ClickhouseDatabase {
     }
 }
 
+impl ClickhouseDatabase {
+    fn set_custom_option(&mut self, key: &str, value: OptionValue) -> Result<()> {
+        match key {
+            options::PRODUCT_INFO => {
+                self.product_info = value.try_into()?;
+            }
+            other => {
+                return Err(Error::with_message_and_status(
+                    format!("unknown database option {other:?}"),
+                    Status::InvalidArguments,
+                ));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// ClickHouse ADBC [`Connection`] implementation.
 pub struct ClickhouseConnection {
     client: AugmentedClient,
     tokio: TokioContext,
@@ -380,14 +403,8 @@ impl Optionable for ClickhouseConnection {
             // OptionConnection::CurrentCatalog => {}
             // OptionConnection::CurrentSchema => {}
             // OptionConnection::IsolationLevel => {}
-            OptionConnection::Other(s) if s == options::PRODUCT_INFO => {
-                self.client.set_product_info(&value.try_into()?);
-            }
-            OptionConnection::Other(other) => {
-                return Err(Error::with_message_and_status(
-                    format!("unknown connection option {other:?}"),
-                    Status::InvalidArguments,
-                ));
+            OptionConnection::Other(s) => {
+                self.set_custom_option(&s, value)?;
             }
             other => {
                 return Err(Error::with_message_and_status(
@@ -414,6 +431,27 @@ impl Optionable for ClickhouseConnection {
 
     fn get_option_double(&self, key: Self::Option) -> adbc_core::error::Result<f64> {
         err_unimplemented!("ClickhouseConnection::get_option_double({key:?})")
+    }
+}
+
+impl ClickhouseConnection {
+    fn set_custom_option(&mut self, key: &str, value: OptionValue) -> Result<()> {
+        match key {
+            options::PRODUCT_INFO => {
+                self.client.set_product_info(&value.try_into()?);
+            }
+            options::SESSION_ID => {
+                self.client.set_option("session_id", value.try_string(key)?);
+            }
+            other => {
+                return Err(Error::with_message_and_status(
+                    format!("unknown connection option {other:?}"),
+                    Status::InvalidArguments,
+                ));
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -446,19 +484,19 @@ impl AugmentedClient {
         });
     }
 
-    fn set_query_id(&mut self, query_id: String) {
+    fn set_option(&mut self, key: &str, value: String) {
         if let Some(modified_client) = &mut self.modified_client {
-            Arc::make_mut(modified_client).set_option("query_id", &query_id);
+            Arc::make_mut(modified_client).set_option(key, &value);
         }
 
-        Arc::make_mut(&mut self.original_client).set_option("query_id", query_id);
+        Arc::make_mut(&mut self.original_client).set_option(key, value);
     }
 
-    fn get_query_id(&self) -> Option<&str> {
+    fn get_option(&self, key: &str) -> Option<&str> {
         self.modified_client
             .as_deref()
             .unwrap_or(&self.original_client)
-            .get_option("query_id")
+            .get_option(key)
     }
 }
 

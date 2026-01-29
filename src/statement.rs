@@ -16,6 +16,7 @@ use arrow_schema::{DataType, Schema, TimeUnit};
 use clickhouse::Client;
 use clickhouse::query::Query;
 
+use crate::options::OptionValueExt;
 use crate::writer::ArrowStreamWriter;
 use crate::{AugmentedClient, Result, TokioContext, options, random_id};
 
@@ -33,7 +34,7 @@ enum BindType {
 
 impl ClickhouseStatement {
     pub(crate) fn new(mut client: AugmentedClient, tokio: TokioContext) -> Self {
-        client.set_query_id(random_id("query"));
+        client.set_option("query_id", random_id("query"));
 
         Self {
             client,
@@ -149,20 +150,9 @@ impl Optionable for ClickhouseStatement {
             // OptionStatement::Incremental => {}
             // OptionStatement::Progress => {}
             // OptionStatement::MaxProgress => {}
-            OptionStatement::Other(s) if s == options::PRODUCT_INFO => {
-                self.client.set_product_info(&value.try_into()?);
+            OptionStatement::Other(s) => {
+                self.set_custom_option(&s, value)?;
             }
-            OptionStatement::Other(s) if s == options::QUERY_ID => match value {
-                OptionValue::String(s) => {
-                    self.client.set_query_id(s);
-                }
-                other => {
-                    return Err(Error::with_message_and_status(
-                        format!("expected string for option {s:?}, got {other:?}"),
-                        Status::InvalidArguments,
-                    ));
-                }
-            },
             other => {
                 return Err(Error::with_message_and_status(
                     format!("unimplemented connection option: {:?}", other.as_ref()),
@@ -185,7 +175,7 @@ impl Optionable for ClickhouseStatement {
             // OptionStatement::Progress => {}
             // OptionStatement::MaxProgress => {}
             OptionStatement::Other(s) if s == options::QUERY_ID => {
-                Ok(self.client.get_query_id().unwrap_or("").into())
+                Ok(self.client.get_option("query_id").unwrap_or("").into())
             }
             other => Err(Error::with_message_and_status(
                 format!("unimplemented connection option: {:?}", other.as_ref()),
@@ -204,6 +194,30 @@ impl Optionable for ClickhouseStatement {
 
     fn get_option_double(&self, key: Self::Option) -> adbc_core::error::Result<f64> {
         err_unimplemented!("ClickhouseStatement::get_option_double({key:?})")
+    }
+}
+
+impl ClickhouseStatement {
+    fn set_custom_option(&mut self, key: &str, value: OptionValue) -> Result<()> {
+        match key {
+            options::PRODUCT_INFO => {
+                self.client.set_product_info(&value.try_into()?);
+            }
+            options::SESSION_ID => {
+                self.client.set_option("session_id", value.try_string(key)?);
+            }
+            options::QUERY_ID => {
+                self.client.set_option("query_id", value.try_string(key)?);
+            }
+            other => {
+                return Err(Error::with_message_and_status(
+                    format!("unexpected statement option {other:?}"),
+                    Status::InvalidArguments,
+                ));
+            }
+        }
+
+        Ok(())
     }
 }
 
