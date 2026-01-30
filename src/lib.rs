@@ -1,9 +1,42 @@
-//! Official ClickHouse driver for [Arrow Database Connectivity (ADBC)][adbc-home]
+//! Official ClickHouse driver for [Arrow Database Connectivity (ADBC)][adbc-home].
 //!
 //! Utilizes the [official ClickHouse Rust client][clickhouse-rs].
 //!
 //! [adbc-home]: https://arrow.apache.org/adbc/current/index.html
 //! [clickhouse-rs]: https://github.com/ClickHouse/clickhouse-rs
+//!
+//! # Feature Flags
+//!
+//! ## ADBC Driver Manager Integration
+//!
+//! When the `ffi` feature is enabled, this crate exports the `AdbcDriverInit()` and `AdbcClickhouseInit()` functions.
+//!
+//! It then may be built as a dynamic library and loaded by an [ADBC driver manager][adbc-driver].
+//!
+//! [adbc-driver]: https://arrow.apache.org/adbc/current/format/how_manager.html
+//!
+//! ## TLS Support
+//!
+//! This package exposes the same Transport Layer Security (TLS) features as
+//! [the `clickhouse` crate](https://github.com/ClickHouse/clickhouse-rs?tab=readme-ov-file#tls) it uses under the hood:
+//!
+//! * `native-tls`: use the native TLS implementation for the platform
+//! * OpenSSL on Linux
+//! * SChannel on Windows
+//! * Secure Transport on macOS
+//! * `rustls-tls`: enables both `rustls-tls-aws-lc` and `rustls-tls-webpki-roots`
+//! * `rustls-tls-aws-lc`: use [Rustls] with the [`aws-lc`] cryptography provider
+//! * `rustls-tls-ring`: use [Rustls] with the [`ring`] cryptography provider
+//! * `rustls-tls-native-roots`: configure [Rustls] to use the native TLS root certificate store for the platform
+//! * `rustls-tls-webpki-roots`: configure [Rustls] to use a statically compiled set of TLS roots ([`webpki-roots`] crate)
+//!
+//! Note that Rustls has no TLS roots by default; when using the `rustls-tls-aws-lc` or `rustls-tls-ring` features,
+//! you should also enable either `rustls-tls-native-roots` or `rustls-tls-webpki-roots` to choose a TLS root store.
+//!
+//! [Rustls]: https://github.com/rustls/rustls
+//! [`aws-lc`]: https://github.com/aws/aws-lc-rs
+//! [`ring`]: https://github.com/briansmith/ring
+//! [`webpki-roots`]: https://github.com/rustls/webpki-roots
 use crate::options::{OptionValueExt, ProductInfo};
 use crate::reader::ArrowStreamReader;
 use adbc_core::error::{Error, Status};
@@ -64,6 +97,7 @@ pub use statement::ClickhouseStatement;
 /// [clickhouse-rs]: https://github.com/ClickHouse/clickhouse-rs
 /// [tokio]: https://tokio.rs/tokio/tutorial
 /// [driver-mgr]: https://arrow.apache.org/adbc/current/format/how_manager.html
+/// [current-thread runtime]: tokio::runtime#current-thread-runtime-behavior-at-the-time-of-writing
 pub struct ClickhouseDriver {
     tokio: Option<TokioContext>,
     // Empty by default.
@@ -73,18 +107,19 @@ pub struct ClickhouseDriver {
 impl ClickhouseDriver {
     /// Initialize the ClickHouse driver.
     ///
-    /// If this is called in the context of [an existing Tokio `Runtime`][tokio::runtime::Handle::try_current],
-    /// and it is a [a multi-thread runtime][tokio::runtime#multi-threaded-runtime-behavior-at-the-time-of-writing],
-    /// then that runtime will be used for all connections.
+    /// If this is called in the context of [an existing Tokio `Runtime`][Handle::try_current],
+    /// and it is a [multi-thread runtime] then that runtime will be used for all connections.
     ///
-    /// Otherwise, a separate [current-thread runtime][tokio::runtime#current-thread-runtime-behavior-at-the-time-of-writing]
-    /// will be used for each connection.
+    /// Otherwise, a separate [current-thread runtime] will be used for each connection.
     ///
     /// Because Tokio's [`Handle::block_on()`] cannot drive a current-thread runtime forward,
     /// this method will not use an existing current-thread runtime, since it could result in a
     /// deadlock if another thread does not call [`Runtime::block_on()`].
     ///
     /// If you want to configure your own runtime, use [`Self::init_with()`] instead.
+    ///
+    /// [multi-thread runtime]: tokio::runtime#multi-threaded-runtime-behavior-at-the-time-of-writing
+    /// [current-thread runtime]: tokio::runtime#current-thread-runtime-behavior-at-the-time-of-writing
     pub fn init() -> Self {
         if let Ok(handle) = Handle::try_current()
             && handle.runtime_flavor() == RuntimeFlavor::MultiThread
@@ -191,8 +226,7 @@ impl Database for ClickhouseDatabase {
             // Default `product_info` that should always be included
             // Note: we don't apply `self.product_info` at this level in case it's set
             // to a different value at a lower level; `AugmentedClient` covers that.
-            .with_product_info("adbc_clickhouse", env!("CARGO_PKG_VERSION"))
-            .with_option("session_id", random_id("session"));
+            .with_product_info("adbc_clickhouse", env!("CARGO_PKG_VERSION"));
 
         if let Some(url) = &self.uri {
             client = client.with_url(url);
@@ -210,10 +244,17 @@ impl Database for ClickhouseDatabase {
         client.set_product_info(&self.product_info);
 
         drop(tokio_guard);
+
         let mut connection = ClickhouseConnection { client, tokio };
 
         for (key, value) in opts {
             connection.set_option(key, value)?;
+        }
+
+        if connection.client.get_option("session_id").is_none() {
+            connection
+                .client
+                .set_option("session_id", random_id("session"));
         }
 
         Ok(connection)
@@ -292,6 +333,37 @@ impl ClickhouseDatabase {
 }
 
 /// ClickHouse ADBC [`Connection`] implementation.
+///
+/// # Sessions in the ClickHouse HTTP Interface
+/// This type does not necessarily represent a persistent TCP connection.
+///
+/// Instead, it makes calls to the [ClickHouse HTTP interface][ch-http]. HTTP/1.1 connections are
+/// transparently cached in the object.
+///
+/// A random [`session_id`] is generated upon construction and subsequently passed to all
+/// HTTP interface calls made by this connection and any [`ClickhouseStatement`]s created from it.
+/// Any session-local state (such as [settings] and [temporary tables]) is stored in association
+/// with this session ID.
+///
+/// The session ID may be overridden or read back using [`options::SESSION_ID`].
+///
+/// Sessions persist for the [default session timeout], which is 60 seconds of inactivity.
+/// Server-side state is not guaranteed past this timeout.
+///
+/// # Tokio Runtime
+/// This connection inherits the Tokio runtime of the parent [`ClickhouseDriver`].
+///
+/// If a runtime was not set when the driver was created, a new [current-thread runtime] is
+/// created for each connection.
+///
+/// See [`ClickhouseDriver::init()`] for details.
+///
+/// [ch-http]: https://clickhouse.com/docs/interfaces/http
+/// [`session_id`]: https://clickhouse.com/docs/interfaces/http#using-clickhouse-sessions-in-the-http-protocol
+/// [settings]: https://clickhouse.com/docs/sql-reference/statements/set
+/// [temporary tables]: https://clickhouse.com/docs/sql-reference/statements/create/table#temporary-tables
+/// [default session timeout]: https://clickhouse.com/docs/operations/server-configuration-parameters/settings#default_session_timeout
+/// [current-thread runtime]: tokio::runtime#current-thread-runtime-behavior-at-the-time-of-writing
 pub struct ClickhouseConnection {
     client: AugmentedClient,
     tokio: TokioContext,
