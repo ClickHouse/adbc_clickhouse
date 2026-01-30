@@ -257,7 +257,7 @@ fn query_with_product_info() {
     let db = driver
         .new_database_with_opts([
             (OptionDatabase::Uri, "http://localhost:8123/".into()),
-            (options::PRODUCT_INFO.into(), db_product_info[..].into()),
+            (options::PRODUCT_INFO.into(), db_product_info.clone().into()),
         ])
         .unwrap();
 
@@ -271,8 +271,11 @@ fn query_with_product_info() {
     );
 
     let conn_product_info = format!("test_conn/0.0.0 {db_product_info}");
-    conn.set_option(options::PRODUCT_INFO.into(), conn_product_info[..].into())
-        .unwrap();
+    conn.set_option(
+        options::PRODUCT_INFO.into(),
+        conn_product_info.clone().into(),
+    )
+    .unwrap();
 
     // The connection should have its own product_info, of course.
     let user_agent = query_user_agent_string(conn.new_statement().unwrap());
@@ -295,7 +298,7 @@ fn query_with_product_info() {
     statement
         .set_option(
             options::PRODUCT_INFO.into(),
-            statement_product_info[..].into(),
+            statement_product_info.clone().into(),
         )
         .unwrap();
 
@@ -311,6 +314,81 @@ fn query_with_product_info() {
         user_agent.starts_with(&conn_product_info),
         "expected User-Agent string {user_agent:?} to contain {conn_product_info:?}"
     );
+}
+
+#[test]
+fn query_with_session_id() {
+    /// Execute `SELECT {foo:String} AS foo` on the given statement and return the result.
+    fn get_foo(mut statement: impl Statement<Option = OptionStatement>) -> String {
+        statement
+            .set_sql_query("SELECT {foo:String} AS foo")
+            .unwrap();
+
+        let mut records = statement.execute().unwrap();
+
+        let record = records
+            .next()
+            .expect("expected one RecordBatch, got none")
+            .unwrap();
+
+        record
+            .column_by_name("foo")
+            .expect("expected column `foo`")
+            .as_string::<i32>()
+            .value(0)
+            .into()
+    }
+
+    let mut driver = test_driver();
+
+    let db = driver
+        .new_database_with_opts([
+            (OptionDatabase::Uri, "http://localhost:8123/".into()),
+            (
+                options::PRODUCT_INFO.into(),
+                format!("adbc_clickhouse_test/{}", env!("CARGO_PKG_VERSION")).into(),
+            ),
+        ])
+        .unwrap();
+
+    let mut conn = db.new_connection().unwrap();
+    let mut conn2 = db.new_connection().unwrap();
+
+    let session_id3 = format!("adbc_clickhouse_test_{}", rand::random::<u64>());
+
+    // In 3 different sessions, set some session-local state that the other queries will rely on
+    let mut set_statement = conn.new_statement().unwrap();
+    set_statement
+        .set_sql_query("SET param_foo = 'foobar'")
+        .unwrap();
+    set_statement.execute_update().unwrap();
+
+    let mut set_statement2 = conn2.new_statement().unwrap();
+    set_statement2
+        .set_sql_query("SET param_foo = 'foobar2'")
+        .unwrap();
+    set_statement2.execute_update().unwrap();
+
+    // Same connection, different session
+    let mut set_statement3 = conn2.new_statement().unwrap();
+    set_statement3
+        .set_option(options::SESSION_ID.into(), session_id3.clone().into())
+        .unwrap();
+    set_statement3
+        .set_sql_query("SET param_foo = 'foobar3'")
+        .unwrap();
+    set_statement3.execute_update().unwrap();
+
+    assert_eq!(get_foo(conn.new_statement().unwrap()), "foobar");
+
+    assert_eq!(get_foo(conn2.new_statement().unwrap()), "foobar2");
+
+    let mut statement3 = conn2.new_statement().unwrap();
+    statement3
+        .set_option(options::SESSION_ID.into(), session_id3.into())
+        .unwrap();
+
+    assert_eq!(get_foo(statement3), "foobar3");
 }
 
 #[cfg(not(feature = "ffi"))]
