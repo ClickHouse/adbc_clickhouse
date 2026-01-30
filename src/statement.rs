@@ -20,6 +20,9 @@ use crate::options::OptionValueExt;
 use crate::writer::ArrowStreamWriter;
 use crate::{AugmentedClient, Result, TokioContext, options, random_id};
 
+/// ClickHouse ADBC [`Statement`] implementation.
+///
+/// This inherits the session ID of the parent [`ClickhouseConnection`][super::ClickhouseConnection].
 pub struct ClickhouseStatement {
     client: AugmentedClient,
     tokio: TokioContext,

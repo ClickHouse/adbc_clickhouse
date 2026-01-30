@@ -56,9 +56,6 @@ The driver DLL must be available in the dynamic link search path for your platfo
 
 [Cargo]: https://doc.rust-lang.org/cargo/index.html
 
-
-
-
 ### Feature Flags
 
 #### ADBC Driver Manager Integration

@@ -7,7 +7,10 @@ use std::ops::Range;
 use std::str::FromStr;
 
 #[cfg(doc)]
-use adbc_core::{Database, Optionable};
+use {
+    crate::{ClickhouseConnection, ClickhouseDatabase, ClickhouseStatement},
+    adbc_core::{Database, Optionable},
+};
 
 /// Product info string to include in ClickHouse API calls.
 ///
@@ -24,9 +27,9 @@ use adbc_core::{Database, Optionable};
 /// as well as the underlying ClickHouse Rust client version.
 ///
 /// This option may be set at any level of the object hierarchy:
-/// * `Database`
-/// * `Connection`
-/// * `Statement`
+/// * [`ClickhouseDatabase`]
+/// * [`ClickhouseConnection`]
+/// * [`ClickhouseStatement`]
 ///
 /// The set value will propagate to any newly created objects lower in the hierarchy.
 ///
