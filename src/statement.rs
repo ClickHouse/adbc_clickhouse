@@ -343,9 +343,8 @@ fn bind_scalar(query: Query, name: &str, array: &dyn Array) -> Result<Query, Err
                 )
             })?;
 
-            // Needs to be explicitly serialized as UTC, otherwise it might be assumed to be
-            // in the server's or column's set time zone.
-            Ok(query.param(name, datetime.and_utc()))
+            // FIXME: we have no way to ensure timestamps are interpreted with the correct time zone
+            Ok(query.param(name, datetime))
         }
         DataType::Date32 => Ok(query.param(
             name,
