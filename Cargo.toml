@@ -1,6 +1,6 @@
 [package]
 name = "adbc_clickhouse"
-version = "0.0.1"
+version = "0.1.0-alpha.1"
 edition = "2024"
 description = "Official ClickHouse ADBC driver."
 authors = [
