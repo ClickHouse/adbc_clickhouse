@@ -106,7 +106,7 @@ pub const SESSION_ID: &str = "clickhouse.client.session_id";
 ///
 /// use adbc_core::{Driver, Database, Connection, Statement, Optionable};
 ///
-/// let driver = ClickhouseDriver::init();
+/// let mut driver = ClickhouseDriver::init();
 ///
 /// let db = driver.new_database().unwrap();
 /// let mut conn = db.new_connection().unwrap();

@@ -4,6 +4,8 @@ The official ClickHouse driver for [Arrow Database Connectivity (ADBC)](https://
 
 Implemented using the [official ClickHouse client for Rust](https://clickhouse.com/docs/integrations/rust).
 
+Connects using the [ClickHouse HTTP  interface](https://clickhouse.com/docs/interfaces/http#overview).
+
 ## Note: Work-in-Progress
 This driver is still under active development and should not be considered ready for production use.
 
@@ -18,41 +20,127 @@ However, the core query flow is supported:
 * Binding a statement in streaming insert mode with `Statement::bind_params()`
 * Executing a statement with `Statement::execute()` or `Statement::execute_update()`
 
-## Usage
+## Building
 
-### ADBC Driver Manager
+### Prerequisites
 
-Binary builds of the driver are pending.
+* Rust and [Cargo] 1.91 or newer
+* Linux with `tls-native-tls` feature: 
+  * GCC/G++ and libc headers (`build-essential`) or Clang 
+  * OpenSSL/LibreSSL/BoringSSL headers (`libssl-dev` on Debian/Ubuntu)
+* All platforms: 
+  * `rustls-tls-aws-lc` feature: see [AWS Libcrypto requirements](https://aws.github.io/aws-lc-rs/requirements/)
+  * `rustls-tls-ring` feature: see [`ring` build requirements](https://github.com/briansmith/ring/blob/main/BUILDING.md)
 
-It may be built from source using Rust 1.91 or newer and [Cargo], Rust's first-party build tool and package manager.
+See below for feature descriptions.
 
-After installing or updating Rust, clone this repository and then choose one of the following `cargo build` commands
+### Driver DLL
+
+The driver supports being built as a dynamic-link library (DLL) for loading with an [ADBC driver manager][adbc-driver].
+
+Clone this repository and then choose one of the following `cargo build` commands
 (refer to the feature descriptions below when customizing):
 
 * Build with Native TLS support (OpenSSL on Linux, Secure Transport on macOS, SChannel on Windows):
-```
+```ignore
 cargo build --release --features ffi,native-tls
 ```
 
 * Build with Rustls and `aws-lc` and the native TLS root certificate store for the platform:
-```
+```ignore
 cargo build --release --features ffi,rustls-tls
 ```
 
 * Build without TLS support (the `ffi` feature is required for use with a driver manager):
-```
+```ignore
 cargo build --release --features ffi
 ```
 
-When finished, the driver dynamic-link library (DLL) can be found under `target/release` with the conventional name and 
+When finished, the driver DLL can be found under `target/release` with the conventional name and
 extension for your platform:
 
 * Linux, BSDs: `libadbc_clickhouse.so`
 * macOS: `libadbc_clickhouse.dylib`
 * Windows: `adbc_clickhouse.dll`
 
-If the driver manager has the option to load the driver by name, pass `adbc_clickhouse` instead of the DLL filename.
-The driver DLL must be available in the dynamic link search path for your platform.
+## Usage
+
+### ADBC Driver Manager
+
+Binary builds of the driver are pending.
+
+Build the driver DLL as described in [Building](#building) above.
+
+The driver DLL can then be loaded by path or by name (assuming it is on the search path for your platform)
+using the driver manager API.
+
+See [the ADBC documentation for your client language](https://arrow.apache.org/adbc/main/index.html) for details.
+
+### Rust API
+
+The driver can be directly used as a Rust crate with or without the `ffi` feature:
+
+`Cargo.toml`:
+```toml
+[dependencies]
+adbc_clickhouse = "0.1.0-alpha.1"
+adbc_core = "0.22.0"
+arrow = "57.0.0"
+```
+
+```rust
+use adbc_clickhouse::ClickhouseDriver;
+
+use adbc_core::{Driver, Database, Connection, Statement};
+use adbc_core::options::OptionDatabase;
+
+use arrow::array::RecordBatchReader;
+use arrow::error::ArrowError;
+use arrow::record_batch::RecordBatch;
+
+let mut driver = ClickhouseDriver::init();
+
+// A `Database` object in ADBC stores the login credentials for a specific database.
+let database = driver.new_database_with_opts([
+    // The driver connects using the ClickHouse HTTP interface:
+    // https://clickhouse.com/docs/interfaces/http#overview
+    (OptionDatabase::Uri, "http://localhost:8123".into()),
+    (OptionDatabase::Username, "default".into()),
+    (OptionDatabase::Password, "".into()),
+])
+    .unwrap();
+    
+// Each new connection uses a different `session_id`:
+// https://clickhouse.com/docs/interfaces/http#using-clickhouse-sessions-in-the-http-protocol
+// Note that the default session timeout is 60 seconds.
+let mut connection = database.new_connection().unwrap();
+
+// Each statement is assigned its own query ID.
+let mut statement = connection.new_statement().unwrap();
+
+statement
+    .set_sql_query("SELECT number, 'test_' || number as name FROM system.numbers LIMIT 10")
+    .unwrap();
+
+let reader = statement.execute().unwrap(); // `impl RecordBatchReader`
+
+// Required for `concat_batches()`.
+// This could also be taken from the first `RecordBatch`, 
+// but getting it from the reader works even when the result set is empty.
+let schema = reader.schema(); 
+
+let record_batches = reader
+    .collect::<Result<Vec<RecordBatch>, ArrowError>>()
+    .unwrap();
+    
+// In practice, ClickHouse should return the data for the above query in a single batch.
+// However, for larger datasets, the data may be returned in multiple batches.
+// For the sake of the example, we assume that we may have to concatenate multiple batches.
+let record_batch = arrow::compute::concat_batches(&schema, &record_batches)
+    .unwrap();
+    
+println!("{record_batch:?}");
+```
 
 [Cargo]: https://doc.rust-lang.org/cargo/index.html
 

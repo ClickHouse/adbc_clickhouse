@@ -72,6 +72,10 @@ mod schema;
 mod statement;
 mod writer;
 
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub mod readme_test {}
+
 // `adbc_core::error::Result` doesn't support overriding the error type
 // so it's hazardous to import directly
 pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
