@@ -16,9 +16,21 @@ use arrow_schema::{DataType, Schema, TimeUnit};
 use clickhouse::Client;
 use clickhouse::query::Query;
 
+use crate::options::OptionValueExt;
 use crate::writer::ArrowStreamWriter;
 use crate::{AugmentedClient, Result, TokioContext, options, random_id};
 
+/// ClickHouse ADBC [`Statement`] implementation.
+///
+/// This inherits the session ID of the parent [`ClickhouseConnection`][super::ClickhouseConnection].
+///
+/// A random query ID is generated upon creation of the object. It may be read back or overridden
+/// using [`options::QUERY_ID`].
+///
+/// [Query parameters] are supported using [`Self::bind()`] to bind a single `RecordBatch`.
+///
+/// Streaming inserts are supported with [`Self::bind_stream()`] and [`Self::execute_update()`].
+/// For streaming inserts, the SQL query must be of the form `INSERT INTO ... FORMAT ArrowStream`.
 pub struct ClickhouseStatement {
     client: AugmentedClient,
     tokio: TokioContext,
@@ -33,7 +45,7 @@ enum BindType {
 
 impl ClickhouseStatement {
     pub(crate) fn new(mut client: AugmentedClient, tokio: TokioContext) -> Self {
-        client.set_query_id(random_id("query"));
+        client.set_option("query_id", random_id("query"));
 
         Self {
             client,
@@ -45,11 +57,42 @@ impl ClickhouseStatement {
 }
 
 impl Statement for ClickhouseStatement {
+    /// Bind a single `RecordBatch` to this query.
+    ///
+    /// If the SQL contains a normal query (e.g. `SELECT`), the `RecordBatch` may have
+    /// no more than one row. Types will be converted client-side to their ClickHouse equivalents
+    /// and bound as [query parameters]. Most of the basic types are supported.
+    /// See `bind_scalar()` in this source file for details.
+    ///
+    /// If the SQL is a streaming insert of the form `INSERT INTO ... FORMAT ArrowStream`,
+    /// the `RecordBatch` may have arbitrary many rows. The data will be sent to ClickHouse in
+    /// the [Arrow IPC format] and converted server-side.
+    ///
+    /// This may be called before or after [`Self::set_sql_query()`]. Binding is performed
+    /// during the call to [`Self::execute()`] or [`Self::execute_update()`]`.
+    ///
+    /// [query parameters]: https://clickhouse.com/docs/sql-reference/syntax#defining-and-using-query-parameters
+    /// [Arrow IPC format]: https://arrow.apache.org/docs/format/Columnar.html#format-ipc
     fn bind(&mut self, batch: RecordBatch) -> adbc_core::error::Result<()> {
         self.bind = Some(BindType::Single(batch));
         Ok(())
     }
 
+    /// Bind an `Iterator` of `RecordBatch` to this query.
+    ///
+    /// If the SQL contains a normal query (e.g. `SELECT`), this behaves identically
+    /// to [`Self::bind()`]. The iterator may only return one `RecordBatch`, which may contain
+    /// at most one row.
+    ///
+    /// If the SQL query is of the form `INSERT INTO ... FORMAT ArrowStream`,
+    /// the iterator may return arbitrarily many `RecordBatch`es, and they may contain arbitrarily
+    /// many rows. The data will be sent to ClickHouse in the [Arrow IPC format]
+    /// and converted server-side.
+    ///
+    /// This may be called before or after [`Self::set_sql_query()`]. Binding is performed
+    /// during the call to [`Self::execute()`] or [`Self::execute_update()`]`.
+    ///
+    /// [Arrow IPC format]: https://arrow.apache.org/docs/format/Columnar.html#format-ipc
     fn bind_stream(
         &mut self,
         reader: Box<dyn RecordBatchReader + Send>,
@@ -58,6 +101,14 @@ impl Statement for ClickhouseStatement {
         Ok(())
     }
 
+    /// Execute a query that returns a result set.
+    ///
+    /// # Errors
+    /// * If the SQL query is of the form `INSERT INTO ... FORMAT ArrowStream`,
+    ///   as [`Self::execute_update()`] should be used instead.
+    /// * If the `RecordBatch` bound with [`Self::bind()`] contains more than one row.
+    /// * If the `RecordBatchReader` bound with [`Self::bind_stream()`] returns more than one
+    ///   `RecordBatch` or a `RecordBatch` with more than one row.
     fn execute(&mut self) -> adbc_core::error::Result<impl RecordBatchReader + Send> {
         let sql = expect_sql_query(&self.sql_query)?;
 
@@ -75,6 +126,7 @@ impl Statement for ClickhouseStatement {
         fetch_blocking(&self.client, &self.tokio, sql, self.bind.take())
     }
 
+    /// Execute a query that does not return a result set.
     fn execute_update(&mut self) -> adbc_core::error::Result<Option<i64>> {
         let sql = expect_sql_query(&self.sql_query)?;
 
@@ -118,6 +170,12 @@ impl Statement for ClickhouseStatement {
         err_unimplemented!("ClickhouseStatement::prepare()")
     }
 
+    /// Set the SQL for this [`Statement`].
+    ///
+    /// For normal queries, e.g. `SELECT`, the `FORMAT` clause may be omitted.
+    /// Use of any explicit format other than `ArrowStream` may result in an execution error.
+    ///
+    /// For streaming inserts, the query should be of the form `INSERT INTO ... FORMAT ArrowStream`.
     fn set_sql_query(&mut self, query: impl AsRef<str>) -> adbc_core::error::Result<()> {
         self.sql_query = Some(query.as_ref().to_string());
         Ok(())
@@ -149,20 +207,9 @@ impl Optionable for ClickhouseStatement {
             // OptionStatement::Incremental => {}
             // OptionStatement::Progress => {}
             // OptionStatement::MaxProgress => {}
-            OptionStatement::Other(s) if s == options::PRODUCT_INFO => {
-                self.client.set_product_info(&value.try_into()?);
+            OptionStatement::Other(s) => {
+                self.set_custom_option(&s, value)?;
             }
-            OptionStatement::Other(s) if s == options::QUERY_ID => match value {
-                OptionValue::String(s) => {
-                    self.client.set_query_id(s);
-                }
-                other => {
-                    return Err(Error::with_message_and_status(
-                        format!("expected string for option {s:?}, got {other:?}"),
-                        Status::InvalidArguments,
-                    ));
-                }
-            },
             other => {
                 return Err(Error::with_message_and_status(
                     format!("unimplemented connection option: {:?}", other.as_ref()),
@@ -185,7 +232,7 @@ impl Optionable for ClickhouseStatement {
             // OptionStatement::Progress => {}
             // OptionStatement::MaxProgress => {}
             OptionStatement::Other(s) if s == options::QUERY_ID => {
-                Ok(self.client.get_query_id().unwrap_or("").into())
+                Ok(self.client.get_option("query_id").unwrap_or("").into())
             }
             other => Err(Error::with_message_and_status(
                 format!("unimplemented connection option: {:?}", other.as_ref()),
@@ -204,6 +251,30 @@ impl Optionable for ClickhouseStatement {
 
     fn get_option_double(&self, key: Self::Option) -> adbc_core::error::Result<f64> {
         err_unimplemented!("ClickhouseStatement::get_option_double({key:?})")
+    }
+}
+
+impl ClickhouseStatement {
+    fn set_custom_option(&mut self, key: &str, value: OptionValue) -> Result<()> {
+        match key {
+            options::PRODUCT_INFO => {
+                self.client.set_product_info(&value.try_into()?);
+            }
+            options::SESSION_ID => {
+                self.client.set_option("session_id", value.try_string(key)?);
+            }
+            options::QUERY_ID => {
+                self.client.set_option("query_id", value.try_string(key)?);
+            }
+            other => {
+                return Err(Error::with_message_and_status(
+                    format!("unexpected statement option {other:?}"),
+                    Status::InvalidArguments,
+                ));
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -326,9 +397,12 @@ fn bind_scalar(query: Query, name: &str, array: &dyn Array) -> Result<Query, Err
                 )
             })?;
 
-            // Needs to be explicitly serialized as UTC, otherwise it might be assumed to be
-            // in the server's or column's set time zone.
-            Ok(query.param(name, datetime.and_utc()))
+            // FIXME: we have no way to ensure timestamps are interpreted with the correct time zone
+            // https://github.com/ClickHouse/ClickHouse/issues/95913
+            //
+            // To match the server behavior, we should serialize timestamps with a timezone as UTC,
+            // and serialize them as naive otherwise: https://github.com/ClickHouse/ClickHouse/blob/db27d85fb2d2fa137d531d08dff13109a86cead5/src/Processors/Formats/Impl/ArrowColumnToCHColumn.cpp#L402-L406
+            Ok(query.param(name, datetime))
         }
         DataType::Date32 => Ok(query.param(
             name,

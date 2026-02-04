@@ -4,10 +4,10 @@ use adbc_core::{Connection, Database, Driver, Optionable, Statement};
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int32Type;
 use arrow_array::{
-    PrimitiveArray, RecordBatch, RecordBatchIterator, RecordBatchReader, StringArray, create_array,
-    record_batch,
+    PrimitiveArray, RecordBatch, RecordBatchIterator, RecordBatchReader, StringArray,
+    TimestampMillisecondArray, create_array, record_batch,
 };
-use arrow_schema::{DataType, Field, Schema};
+use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use std::sync::Arc;
 
 mod get_table_schema;
@@ -69,6 +69,78 @@ fn basic_query() {
     .unwrap();
 
     assert_eq!(joined, expected);
+}
+
+#[test]
+fn query_with_bind_params() {
+    let mut driver = test_driver();
+
+    let db = driver
+        .new_database_with_opts([
+            (OptionDatabase::Uri, "http://localhost:8123/".into()),
+            (
+                options::PRODUCT_INFO.into(),
+                format!("adbc_clickhouse_test/{}", env!("CARGO_PKG_VERSION")).into(),
+            ),
+        ])
+        .unwrap();
+
+    let mut conn = db.new_connection().unwrap();
+
+    let mut statement = conn.new_statement().unwrap();
+
+    // Don't want to try to cover literally everything, we can let the validation suite handle that
+    // https://github.com/ClickHouse/adbc_clickhouse/issues/5
+    statement
+        .set_sql_query(
+            "SELECT {i32:Int32} AS i32, {u64:UInt64} AS u64, {string:String} AS string, \
+        {nullable_string:Nullable(String)} AS nullable_string, {f32:Float32} AS f32, \
+        {datetime:DateTime64} AS datetime",
+        )
+        .unwrap();
+
+    // `record_batch!()` sets all columns to be nullable
+    let params = RecordBatch::try_new(
+        Schema::new(vec![
+            Field::new("i32", DataType::Int32, false),
+            Field::new("u64", DataType::UInt64, false),
+            Field::new("string", DataType::Utf8, false),
+            Field::new("nullable_string", DataType::Utf8, true),
+            Field::new("f32", DataType::Float32, false),
+            Field::new(
+                "datetime",
+                DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                false,
+            ),
+        ])
+        .into(),
+        vec![
+            create_array!(Int32, [-1234]),
+            create_array!(UInt64, [12345678]),
+            create_array!(Utf8, ["foobar"]),
+            // FIXME: `None` has incorrect serialization: https://github.com/ClickHouse/clickhouse-rs/issues/384
+            create_array!(Utf8, [Some("foobar")]),
+            create_array!(Float32, [std::f32::consts::PI]),
+            // `record_batch!()` also doesn't support `Timestamp`
+            // because it expects an `ident` for the type
+            Arc::new(
+                TimestampMillisecondArray::new(vec![1769818068000].into(), None)
+                    .with_timezone("UTC"),
+            ),
+        ],
+    )
+    .unwrap();
+
+    statement.bind(params.clone()).unwrap();
+
+    let mut records = statement.execute().unwrap();
+
+    let record = records
+        .next()
+        .expect("expected one RecordBatch, got none")
+        .unwrap();
+
+    assert_eq!(params, record);
 }
 
 #[test]
@@ -257,7 +329,7 @@ fn query_with_product_info() {
     let db = driver
         .new_database_with_opts([
             (OptionDatabase::Uri, "http://localhost:8123/".into()),
-            (options::PRODUCT_INFO.into(), db_product_info[..].into()),
+            (options::PRODUCT_INFO.into(), db_product_info.clone().into()),
         ])
         .unwrap();
 
@@ -271,8 +343,11 @@ fn query_with_product_info() {
     );
 
     let conn_product_info = format!("test_conn/0.0.0 {db_product_info}");
-    conn.set_option(options::PRODUCT_INFO.into(), conn_product_info[..].into())
-        .unwrap();
+    conn.set_option(
+        options::PRODUCT_INFO.into(),
+        conn_product_info.clone().into(),
+    )
+    .unwrap();
 
     // The connection should have its own product_info, of course.
     let user_agent = query_user_agent_string(conn.new_statement().unwrap());
@@ -295,7 +370,7 @@ fn query_with_product_info() {
     statement
         .set_option(
             options::PRODUCT_INFO.into(),
-            statement_product_info[..].into(),
+            statement_product_info.clone().into(),
         )
         .unwrap();
 
@@ -311,6 +386,81 @@ fn query_with_product_info() {
         user_agent.starts_with(&conn_product_info),
         "expected User-Agent string {user_agent:?} to contain {conn_product_info:?}"
     );
+}
+
+#[test]
+fn query_with_session_id() {
+    /// Execute `SELECT {foo:String} AS foo` on the given statement and return the result.
+    fn get_foo(mut statement: impl Statement<Option = OptionStatement>) -> String {
+        statement
+            .set_sql_query("SELECT {foo:String} AS foo")
+            .unwrap();
+
+        let mut records = statement.execute().unwrap();
+
+        let record = records
+            .next()
+            .expect("expected one RecordBatch, got none")
+            .unwrap();
+
+        record
+            .column_by_name("foo")
+            .expect("expected column `foo`")
+            .as_string::<i32>()
+            .value(0)
+            .into()
+    }
+
+    let mut driver = test_driver();
+
+    let db = driver
+        .new_database_with_opts([
+            (OptionDatabase::Uri, "http://localhost:8123/".into()),
+            (
+                options::PRODUCT_INFO.into(),
+                format!("adbc_clickhouse_test/{}", env!("CARGO_PKG_VERSION")).into(),
+            ),
+        ])
+        .unwrap();
+
+    let mut conn = db.new_connection().unwrap();
+    let mut conn2 = db.new_connection().unwrap();
+
+    let session_id3 = format!("adbc_clickhouse_test_{}", rand::random::<u64>());
+
+    // In 3 different sessions, set some session-local state that the other queries will rely on
+    let mut set_statement = conn.new_statement().unwrap();
+    set_statement
+        .set_sql_query("SET param_foo = 'foobar'")
+        .unwrap();
+    set_statement.execute_update().unwrap();
+
+    let mut set_statement2 = conn2.new_statement().unwrap();
+    set_statement2
+        .set_sql_query("SET param_foo = 'foobar2'")
+        .unwrap();
+    set_statement2.execute_update().unwrap();
+
+    // Same connection, different session
+    let mut set_statement3 = conn2.new_statement().unwrap();
+    set_statement3
+        .set_option(options::SESSION_ID.into(), session_id3.clone().into())
+        .unwrap();
+    set_statement3
+        .set_sql_query("SET param_foo = 'foobar3'")
+        .unwrap();
+    set_statement3.execute_update().unwrap();
+
+    assert_eq!(get_foo(conn.new_statement().unwrap()), "foobar");
+
+    assert_eq!(get_foo(conn2.new_statement().unwrap()), "foobar2");
+
+    let mut statement3 = conn2.new_statement().unwrap();
+    statement3
+        .set_option(options::SESSION_ID.into(), session_id3.into())
+        .unwrap();
+
+    assert_eq!(get_foo(statement3), "foobar3");
 }
 
 #[cfg(not(feature = "ffi"))]
