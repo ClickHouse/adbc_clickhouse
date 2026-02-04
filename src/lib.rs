@@ -194,8 +194,6 @@ impl Driver for ClickhouseDriver {
 }
 
 /// ClickHouse ADBC [`Database`] implementation.
-///
-///
 pub struct ClickhouseDatabase {
     tokio: Option<TokioContext>,
     uri: Option<String>,

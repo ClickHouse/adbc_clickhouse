@@ -4,7 +4,9 @@ The official ClickHouse driver for [Arrow Database Connectivity (ADBC)](https://
 
 Implemented using the [official ClickHouse client for Rust](https://clickhouse.com/docs/integrations/rust).
 
-Connects using the [ClickHouse HTTP  interface](https://clickhouse.com/docs/interfaces/http#overview).
+Connects using the [ClickHouse HTTP interface][ch-http].
+
+[ch-http]: https://clickhouse.com/docs/interfaces/http#overview
 
 ## Note: Work-in-Progress
 This driver is still under active development and should not be considered ready for production use.
@@ -75,6 +77,9 @@ The driver DLL can then be loaded by path or by name (assuming it is on the sear
 using the driver manager API.
 
 See [the ADBC documentation for your client language](https://arrow.apache.org/adbc/main/index.html) for details.
+
+Because this driver uses the [ClickHouse HTTP interface][ch-http], the database URI (`ADBC_OPTION_URI` in `adbc.h`)
+should use the `http://` or `https://` schemes.
 
 ### Rust API
 
