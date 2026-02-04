@@ -399,6 +399,9 @@ fn bind_scalar(query: Query, name: &str, array: &dyn Array) -> Result<Query, Err
 
             // FIXME: we have no way to ensure timestamps are interpreted with the correct time zone
             // https://github.com/ClickHouse/ClickHouse/issues/95913
+            //
+            // To match the server behavior, we should serialize timestamps with a timezone as UTC,
+            // and serialize them as naive otherwise: https://github.com/ClickHouse/ClickHouse/blob/db27d85fb2d2fa137d531d08dff13109a86cead5/src/Processors/Formats/Impl/ArrowColumnToCHColumn.cpp#L402-L406
             Ok(query.param(name, datetime))
         }
         DataType::Date32 => Ok(query.param(
