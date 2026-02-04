@@ -29,7 +29,7 @@ use crate::{AugmentedClient, Result, TokioContext, options, random_id};
 ///
 /// [Query parameters] are supported using [`Self::bind()`] to bind a single `RecordBatch`.
 ///
-/// Streaming inserts are supported with [`Self::bind_batch()`] and [`Self::execute_update()`].
+/// Streaming inserts are supported with [`Self::bind_stream()`] and [`Self::execute_update()`].
 /// For streaming inserts, the SQL query must be of the form `INSERT INTO ... FORMAT ArrowStream`.
 pub struct ClickhouseStatement {
     client: AugmentedClient,
