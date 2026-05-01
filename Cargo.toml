@@ -41,7 +41,7 @@ clickhouse-types = "0.1.1"
 version = "0.14.2"
 
 [dependencies.rand]
-version = "0.9.2"
+version = "0.9.3"
 features = ["alloc"]
 
 [dependencies.serde]
