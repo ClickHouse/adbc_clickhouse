@@ -2,7 +2,7 @@ use crate::TokioContext;
 use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_buffer::Buffer;
 use arrow_ipc::reader::StreamDecoder;
-use arrow_schema::{ArrowError, SchemaRef};
+use arrow_schema::{ArrowError, Schema, SchemaRef};
 use clickhouse::query::BytesCursor;
 use std::ops::ControlFlow;
 
@@ -39,9 +39,10 @@ impl ArrowStreamReader {
                         break (schema, first_batch);
                     }
 
-                    return Err(ArrowError::SchemaError(
-                        "response stream ended before receiving Schema".into(),
-                    ));
+                    // ClickHouse omits the Arrow IPC schema header for statements with
+                    // no result set (DDL, most DML); surface as an empty result instead
+                    // of erroring. See https://github.com/ClickHouse/adbc_clickhouse/issues/49
+                    break (Schema::empty().into(), None);
                 }
                 ControlFlow::Continue(()) => {
                     if let Some(schema) = state.decoder.schema() {

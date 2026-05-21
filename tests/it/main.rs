@@ -20,18 +20,7 @@ mod get_table_schema;
 // To test with dynamic linking, set `ADBC_CLICKHOUSE_TEST_LOAD_DYNAMIC=1`
 #[test]
 fn basic_query() {
-    let mut driver = test_driver();
-
-    let db = driver
-        .new_database_with_opts([
-            (OptionDatabase::Uri, "http://localhost:8123/".into()),
-            (
-                options::PRODUCT_INFO.into(),
-                format!("adbc_clickhouse_test/{}", env!("CARGO_PKG_VERSION")).into(),
-            ),
-        ])
-        .unwrap();
-
+    let db = test_database();
     let mut conn = db.new_connection().unwrap();
 
     let mut statement = conn.new_statement().unwrap();
@@ -73,18 +62,7 @@ fn basic_query() {
 
 #[test]
 fn query_with_bind_params() {
-    let mut driver = test_driver();
-
-    let db = driver
-        .new_database_with_opts([
-            (OptionDatabase::Uri, "http://localhost:8123/".into()),
-            (
-                options::PRODUCT_INFO.into(),
-                format!("adbc_clickhouse_test/{}", env!("CARGO_PKG_VERSION")).into(),
-            ),
-        ])
-        .unwrap();
-
+    let db = test_database();
     let mut conn = db.new_connection().unwrap();
 
     let mut statement = conn.new_statement().unwrap();
@@ -145,18 +123,7 @@ fn query_with_bind_params() {
 
 #[test]
 fn streaming_insert() {
-    let mut driver = test_driver();
-
-    let db = driver
-        .new_database_with_opts([
-            (OptionDatabase::Uri, "http://localhost:8123/".into()),
-            (
-                options::PRODUCT_INFO.into(),
-                format!("adbc_clickhouse_test/{}", env!("CARGO_PKG_VERSION")).into(),
-            ),
-        ])
-        .unwrap();
-
+    let db = test_database();
     let mut conn = db.new_connection().unwrap();
 
     let mut create_table = conn.new_statement().unwrap();
@@ -252,6 +219,57 @@ fn streaming_insert() {
     .unwrap();
 
     assert_eq!(batch, expected);
+}
+
+#[test]
+fn execute_handles_no_result_set_statements() {
+    // Regression test for https://github.com/ClickHouse/adbc_clickhouse/issues/49:
+    // ClickHouse responds to DDL/DML with an empty body (no Arrow IPC schema
+    // header), but ADBC clients route every statement through `execute()`, so
+    // `execute()` must succeed with an empty result instead of erroring.
+    let db = test_database();
+    let mut conn = db.new_connection().unwrap();
+
+    // DDL via `execute()`.
+    let mut create = conn.new_statement().unwrap();
+    create
+        .set_sql_query("CREATE TEMPORARY TABLE issue_49(id Int32) ENGINE = MergeTree ORDER BY id")
+        .unwrap();
+    let reader = create.execute().unwrap();
+    assert_eq!(reader.schema().fields().len(), 0);
+    assert!(reader.collect::<Result<Vec<_>, _>>().unwrap().is_empty());
+
+    // DML via `execute()`, plus repeat `next()` to confirm idempotency at EOF.
+    let mut insert = conn.new_statement().unwrap();
+    insert
+        .set_sql_query("INSERT INTO issue_49 VALUES (1), (2), (3)")
+        .unwrap();
+    let mut reader = insert.execute().unwrap();
+    assert_eq!(reader.schema().fields().len(), 0);
+    assert!(reader.next().is_none());
+    assert!(
+        reader.next().is_none(),
+        "iterator must be idempotent at EOF"
+    );
+    drop(reader);
+
+    // Confirms the empty-result path didn't silently swallow the INSERT.
+    let mut select = conn.new_statement().unwrap();
+    select
+        .set_sql_query("SELECT count() AS n FROM issue_49")
+        .unwrap();
+    let reader = select.execute().unwrap();
+    let schema = reader.schema();
+    let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+    let joined = arrow::compute::concat_batches(&schema, &batches).unwrap();
+
+    let expected = RecordBatch::try_new(
+        Schema::new(vec![Field::new("n", DataType::UInt64, false)]).into(),
+        vec![create_array!(UInt64, [3u64])],
+    )
+    .unwrap();
+
+    assert_eq!(joined, expected);
 }
 
 #[test]
@@ -411,18 +429,7 @@ fn query_with_session_id() {
             .into()
     }
 
-    let mut driver = test_driver();
-
-    let db = driver
-        .new_database_with_opts([
-            (OptionDatabase::Uri, "http://localhost:8123/".into()),
-            (
-                options::PRODUCT_INFO.into(),
-                format!("adbc_clickhouse_test/{}", env!("CARGO_PKG_VERSION")).into(),
-            ),
-        ])
-        .unwrap();
-
+    let db = test_database();
     let mut conn = db.new_connection().unwrap();
     let mut conn2 = db.new_connection().unwrap();
 
@@ -499,4 +506,23 @@ pub(crate) fn test_driver() -> adbc_driver_manager::ManagedDriver {
         let init: adbc_ffi::FFI_AdbcDriverInitFunc = adbc_clickhouse::AdbcClickhouseInit;
         adbc_driver_manager::ManagedDriver::load_static(&init, AdbcVersion::V110).unwrap()
     }
+}
+
+#[cfg(not(feature = "ffi"))]
+type TestDatabase = adbc_clickhouse::ClickhouseDatabase;
+
+#[cfg(feature = "ffi")]
+type TestDatabase = adbc_driver_manager::ManagedDatabase;
+
+pub(crate) fn test_database() -> TestDatabase {
+    let mut driver = test_driver();
+    driver
+        .new_database_with_opts([
+            (OptionDatabase::Uri, "http://localhost:8123/".into()),
+            (
+                options::PRODUCT_INFO.into(),
+                format!("adbc_clickhouse_test/{}", env!("CARGO_PKG_VERSION")).into(),
+            ),
+        ])
+        .unwrap()
 }
