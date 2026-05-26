@@ -22,56 +22,16 @@ However, the core query flow is supported:
 * Binding a statement in streaming insert mode with `Statement::bind_stream()`
 * Executing a statement with `Statement::execute()` or `Statement::execute_update()`
 
-## Building
-
-### Prerequisites
-
-* Rust and [Cargo] 1.91 or newer
-* Linux with `tls-native-tls` feature: 
-  * GCC/G++ and libc headers (`build-essential`) or Clang 
-  * OpenSSL/LibreSSL/BoringSSL headers (`libssl-dev` on Debian/Ubuntu)
-* All platforms: 
-  * `rustls-tls-aws-lc` feature: see [AWS Libcrypto requirements](https://aws.github.io/aws-lc-rs/requirements/)
-  * `rustls-tls-ring` feature: see [`ring` build requirements](https://github.com/briansmith/ring/blob/main/BUILDING.md)
-
-See below for feature descriptions.
-
-### Driver DLL
-
-The driver supports being built as a dynamic-link library (DLL) for loading with an [ADBC driver manager][adbc-driver].
-
-Clone this repository and then choose one of the following `cargo build` commands
-(refer to the feature descriptions below when customizing):
-
-* Build with Native TLS support (OpenSSL on Linux, Secure Transport on macOS, SChannel on Windows):
-```ignore
-cargo build --release --features ffi,native-tls
-```
-
-* Build with Rustls and `aws-lc` and the native TLS root certificate store for the platform:
-```ignore
-cargo build --release --features ffi,rustls-tls
-```
-
-* Build without TLS support (the `ffi` feature is required for use with a driver manager):
-```ignore
-cargo build --release --features ffi
-```
-
-When finished, the driver DLL can be found under `target/release` with the conventional name and
-extension for your platform:
-
-* Linux, BSDs: `libadbc_clickhouse.so`
-* macOS: `libadbc_clickhouse.dylib`
-* Windows: `adbc_clickhouse.dll`
 
 ## Usage
 
 ### ADBC Driver Manager
 
-Binary builds of the driver are pending.
+Binary builds of the driver are graciously provided by [our friends at the ADBC Driver Foundary](https://docs.adbc-drivers.org/drivers/clickhouse/).
 
-Build the driver DLL as described in [Building](#building) above.
+The driver can be installed through the `dbc` tool as shown in the link above, or downloaded manually from <https://github.com/adbc-drivers/clickhouse/releases>.
+
+Alternatively, the driver DLL can be built from source as described in [Building from Source](#building-from-source) below.
 
 The driver DLL can then be loaded by path or by name (assuming it is on the search path for your platform)
 using the driver manager API.
@@ -83,7 +43,7 @@ should use the `http://` or `https://` schemes.
 
 ### Rust API
 
-The driver can be directly used as a Rust crate with or without the `ffi` feature:
+The driver can be directly used as a Rust crate with or without the `ffi` feature (see [Building from Source](#building-from-source) below for prerequisites):
 
 `Cargo.toml`:
 ```toml
@@ -155,7 +115,7 @@ println!("{record_batch:?}");
 
 When the `ffi` feature is enabled, this crate exports the `AdbcDriverInit()` and `AdbcClickhouseInit()` functions.
 
-It then may be built as a dynamic library and loaded by an [ADBC driver manager][adbc-driver].
+It then may be built or installed as a dynamic library and loaded by an [ADBC driver manager][adbc-driver].
 
 [adbc-driver]: https://arrow.apache.org/adbc/current/format/how_manager.html
 
@@ -181,6 +141,50 @@ you should also enable either `rustls-tls-native-roots` or `rustls-tls-webpki-ro
 [`aws-lc`]: https://github.com/aws/aws-lc-rs
 [`ring`]: https://github.com/briansmith/ring
 [`webpki-roots`]: https://github.com/rustls/webpki-roots
+
+## Building from Source
+Users of the Rust API should also read this section.
+
+### Prerequisites
+
+* Rust and [Cargo] 1.91 or newer
+* On Linux when using the `tls-native-tls` feature: 
+  * GCC/G++ and libc headers (`build-essential`) or Clang 
+  * OpenSSL/LibreSSL/BoringSSL headers (`libssl-dev` on Debian/Ubuntu)
+* All platforms: 
+  * `rustls-tls-aws-lc` feature: see [AWS Libcrypto requirements](https://aws.github.io/aws-lc-rs/requirements/)
+  * `rustls-tls-ring` feature: see [`ring` build requirements](https://github.com/briansmith/ring/blob/main/BUILDING.md)
+
+See [the Feature Flags section](#feature-flags) for feature descriptions.
+
+### Driver DLL
+
+The driver supports being built as a dynamic-link library (DLL) for loading with an [ADBC driver manager][adbc-driver].
+
+Clone this repository and then choose one of the following `cargo build` commands
+(refer to [the Feature Flags section](#feature-flags) section above when customizing):
+
+* Build with Native TLS support (OpenSSL on Linux, Secure Transport on macOS, SChannel on Windows):
+```ignore
+cargo build --release --features ffi,native-tls
+```
+
+* Build with Rustls and `aws-lc` and the native TLS root certificate store for the platform:
+```ignore
+cargo build --release --features ffi,rustls-tls
+```
+
+* Build without TLS support (the `ffi` feature is required for use with a driver manager):
+```ignore
+cargo build --release --features ffi
+```
+
+When finished, the driver DLL can be found under `target/release` with the conventional name and
+extension for your platform:
+
+* Linux, BSDs: `libadbc_clickhouse.so`
+* macOS: `libadbc_clickhouse.dylib`
+* Windows: `adbc_clickhouse.dll`
 
 ## Support Policies
 
