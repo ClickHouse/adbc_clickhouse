@@ -27,7 +27,7 @@ However, the core query flow is supported:
 
 ### ADBC Driver Manager
 
-Binary builds of the driver are graciously provided by [our friends at the ADBC Driver Foundary](https://docs.adbc-drivers.org/drivers/clickhouse/).
+Binary builds of the driver are graciously provided by [our friends at the ADBC Driver Foundry](https://docs.adbc-drivers.org/drivers/clickhouse/).
 
 The driver can be installed through the `dbc` tool as shown in the link above, or downloaded manually from <https://github.com/adbc-drivers/clickhouse/releases>.
 
