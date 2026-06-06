@@ -10,6 +10,7 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use std::sync::Arc;
 
+mod bulk_ingest;
 mod get_table_schema;
 
 // NOTE: tests run with the `current-thread` runtime by default.
@@ -119,6 +120,12 @@ fn query_with_bind_params() {
         .unwrap();
 
     assert_eq!(params, record);
+
+    // Test that `ArrowStreamReader` fuses to `None` and doesn't block or return an error.
+    for _ in 0..5 {
+        let next = records.next();
+        assert!(next.is_none(), "expected None, got {next:?}");
+    }
 }
 
 #[test]
