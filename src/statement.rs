@@ -27,6 +27,9 @@ use crate::{AugmentedClient, Result, TokioContext, options, random_id};
 use clickhouse::_priv::sql_escape_identifier;
 use clickhouse_ext_arrow::ArrowQueryExt;
 
+#[cfg(doc)]
+use adbc_core::options::IngestMode;
+
 /// ClickHouse ADBC [`Statement`] implementation.
 ///
 /// This inherits the session ID of the parent [`ClickhouseConnection`][super::ClickhouseConnection].
@@ -38,6 +41,8 @@ use clickhouse_ext_arrow::ArrowQueryExt;
 ///
 /// Streaming inserts are supported with [`Self::bind_stream()`] and [`Self::execute_update()`].
 /// For streaming inserts, the SQL query must be of the form `INSERT INTO ... FORMAT ArrowStream`.
+///
+/// [Query parameters]: https://clickhouse.com/docs/sql-reference/syntax#defining-and-using-query-parameters
 pub struct ClickhouseStatement {
     client: AugmentedClient,
     tokio: TokioContext,
