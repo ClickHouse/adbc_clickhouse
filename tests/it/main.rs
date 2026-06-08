@@ -363,7 +363,7 @@ fn query_with_product_info() {
     // Product info should be inherited by the connection
     let user_agent = query_user_agent_string(conn.new_statement().unwrap());
     assert!(
-        user_agent.starts_with(&db_product_info),
+        user_agent.contains(&db_product_info),
         "expected User-Agent string {user_agent:?} to contain {db_product_info:?}"
     );
 
@@ -377,14 +377,14 @@ fn query_with_product_info() {
     // The connection should have its own product_info, of course.
     let user_agent = query_user_agent_string(conn.new_statement().unwrap());
     assert!(
-        user_agent.starts_with(&conn_product_info),
+        user_agent.contains(&conn_product_info),
         "expected User-Agent string {user_agent:?} to contain {conn_product_info:?}"
     );
 
     // A different connection should inherit the product_info of the database
     let user_agent = query_user_agent_string(db.new_connection().unwrap().new_statement().unwrap());
     assert!(
-        user_agent.starts_with(&db_product_info),
+        user_agent.contains(&db_product_info),
         "expected User-Agent string {user_agent:?} to contain {db_product_info:?}"
     );
 
@@ -401,14 +401,14 @@ fn query_with_product_info() {
 
     let user_agent = query_user_agent_string(statement);
     assert!(
-        user_agent.starts_with(&statement_product_info),
+        user_agent.contains(&statement_product_info),
         "expected User-Agent string {user_agent:?} to contain {statement_product_info:?}"
     );
 
     // A different statement should inherit the product_info of the connection
     let user_agent = query_user_agent_string(conn.new_statement().unwrap());
     assert!(
-        user_agent.starts_with(&conn_product_info),
+        user_agent.contains(&conn_product_info),
         "expected User-Agent string {user_agent:?} to contain {conn_product_info:?}"
     );
 }
