@@ -439,7 +439,7 @@ impl StatementMode {
 
 // `#[derive(Default)]`` would likely need to be un-converted later to set other defaults,
 // e.g. `IngestMode`.
-#[allow(clippy::derivable_impls)]
+#[expect(clippy::derivable_impls)]
 impl Default for IngestOptions {
     fn default() -> Self {
         IngestOptions {
