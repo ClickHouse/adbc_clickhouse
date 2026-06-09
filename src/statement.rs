@@ -274,7 +274,7 @@ impl Optionable for ClickhouseStatement {
     ///
     /// # Supported [`OptionStatement`] Options
     ///
-    /// * [`OptionStatement::TargetDbSchema`]: set the target schema for "bulk ingest" operation.
+    /// * [`OptionStatement::TargetDbSchema`]: set the target database for "bulk ingest" operation.
     ///   Overrides the SQL query previously set by [`Statement::set_sql_query()`].
     ///   Requires [`OptionStatement::TargetTable`] to be set before execute.
     ///   Automatically escaped.
