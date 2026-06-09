@@ -493,7 +493,7 @@ impl IngestOptions {
             comma = true;
         }
 
-        sql.push(')');
+        sql.push_str(") FORMAT ArrowStream");
 
         Ok(Ingest {
             sql,
