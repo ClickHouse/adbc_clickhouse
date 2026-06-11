@@ -39,8 +39,16 @@ use adbc_core::options::IngestMode;
 ///
 /// [Query parameters] are supported using [`Self::bind()`] to bind a single `RecordBatch`.
 ///
-/// Streaming inserts are supported with [`Self::bind_stream()`] and [`Self::execute_update()`].
-/// For streaming inserts, the SQL query must be of the form `INSERT INTO ... FORMAT ArrowStream`.
+/// # Bulk Ingest
+/// To insert data in bulk:
+///
+/// * Set [`OptionStatement::TargetTable`] via [`Self::set_option()`] to enable bulk ingest
+///   * Or set a SQL query of the form `INSERT INTO ... FORMAT ArrowStream`
+///     via [`Self::set_sql_query()`]
+///   * For qualified table names, use [`OptionStatement::TargetDbSchema`] to set the database
+///     portion of the table name, e.g. `foo` in `foo.bar`
+/// * Bind a batch of data using [`Self::bind()`] or a stream of data using [`Self::bind_stream()`]
+/// * Execute the statement with [`Self::execute_update()`]
 ///
 /// [Query parameters]: https://clickhouse.com/docs/sql-reference/syntax#defining-and-using-query-parameters
 pub struct ClickhouseStatement {
@@ -107,7 +115,8 @@ impl Statement for ClickhouseStatement {
     /// to [`Self::bind()`]. The iterator may only return one `RecordBatch`, which may contain
     /// at most one row.
     ///
-    /// If the SQL query is of the form `INSERT INTO ... FORMAT ArrowStream`,
+    /// If "bulk ingest" mode is configured with [`OptionStatement::TargetTable`],
+    /// or the SQL query is of the form `INSERT INTO ... FORMAT ArrowStream`,
     /// the iterator may return arbitrarily many `RecordBatch`es, and they may contain arbitrarily
     /// many rows. The data will be sent to ClickHouse in the [Arrow IPC format]
     /// and converted server-side.
@@ -127,7 +136,8 @@ impl Statement for ClickhouseStatement {
     /// Execute a query that returns a result set.
     ///
     /// # Errors
-    /// * If the SQL query is of the form `INSERT INTO ... FORMAT ArrowStream`,
+    /// * If "bulk ingest" mode is enabled via [`OptionStatement::TargetTable`],
+    ///   or the set SQL query is of the form `INSERT INTO ... FORMAT ArrowStream`,
     ///   as [`Self::execute_update()`] should be used instead.
     /// * If the `RecordBatch` bound with [`Self::bind()`] contains more than one row.
     /// * If the `RecordBatchReader` bound with [`Self::bind_stream()`] returns more than one
@@ -146,7 +156,7 @@ impl Statement for ClickhouseStatement {
                 // require adding special casing to `ArrowStreamReader`, or dynamic dispatch.
                 // https://arrow.apache.org/adbc/current/format/specification.html#bulk-data-ingestion
                 return Err(Error::with_message_and_status(
-                    "streaming inserts may only be used with `Statement::execute_update()`",
+                    "bulk ingest may only be used with `Statement::execute_update()`",
                     Status::InvalidState,
                 ));
             }
@@ -154,7 +164,7 @@ impl Statement for ClickhouseStatement {
                 if is_streaming_insert(sql) {
                     // Same as above
                     return Err(Error::with_message_and_status(
-                        "streaming inserts may only be used with `Statement::execute_update()`",
+                        "bulk ingest may only be used with `Statement::execute_update()`",
                         Status::InvalidState,
                     ));
                 }
@@ -186,7 +196,7 @@ impl Statement for ClickhouseStatement {
                     Some(BindType::Single(batch)) => batch.schema(),
                     None => {
                         return Err(Error::with_message_and_status(
-                            "streaming insert requires `Statement::bind()` or `Statement::bind_stream`",
+                            "bulk ingest requires `Statement::bind()` or `Statement::bind_stream`",
                             Status::InvalidState,
                         ));
                     }
@@ -247,10 +257,10 @@ impl Statement for ClickhouseStatement {
     /// For normal queries, e.g. `SELECT`, the `FORMAT` clause may be omitted.
     /// Use of any explicit format other than `ArrowStream` may result in an execution error.
     ///
-    /// For streaming inserts, the query should be of the form `INSERT INTO ... FORMAT ArrowStream`.
+    /// For bulk ingest, the query should be of the form `INSERT INTO ... FORMAT ArrowStream`.
     ///
-    /// Alternatively, bulk ingest may be configured via [`OptionStatement`],
-    /// e.g. setting [`OptionStatement::TargetTable`].
+    /// Alternatively, bulk ingest may be declaratively configured via [`OptionStatement`],
+    /// e.g. setting [`OptionStatement::TargetTable`], which overrides the set SQL query.
     ///
     /// Overwrites any previously set bulk ingest options, e.g. [`OptionStatement::TargetTable`].
     fn set_sql_query(&mut self, query: impl AsRef<str>) -> adbc_core::error::Result<()> {
