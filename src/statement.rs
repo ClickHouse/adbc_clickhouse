@@ -236,18 +236,38 @@ impl Statement for ClickhouseStatement {
         execute_streaming_ingest(&self.client, &self.tokio, ingest, stream)
     }
 
+    /// # Not Implemented
+    /// Currently will return an error with [`Status::NotImplemented`].
+    ///
+    /// See the tracking issue for details and subscribe for updates:
+    /// <https://github.com/ClickHouse/adbc_clickhouse/issues/16>
     fn execute_schema(&mut self) -> adbc_core::error::Result<Schema> {
         err_unimplemented!("ClickhouseStatement::execute_schema()")
     }
 
+    /// # Not Implemented
+    /// Currently will return an error with [`Status::NotImplemented`].
+    ///
+    /// See the tracking issue for details and subscribe for updates:
+    /// <https://github.com/ClickHouse/adbc_clickhouse/issues/17>
     fn execute_partitions(&mut self) -> adbc_core::error::Result<PartitionedResult> {
         err_unimplemented!("ClickhouseStatement::execute_partitions()")
     }
 
+    /// # Not Implemented
+    /// Currently will return an error with [`Status::NotImplemented`].
+    ///
+    /// See the tracking issue for details and subscribe for updates:
+    /// <https://github.com/ClickHouse/adbc_clickhouse/issues/18>
     fn get_parameter_schema(&self) -> adbc_core::error::Result<Schema> {
         err_unimplemented!("ClickhouseStatement::get_parameter_schema()")
     }
 
+    /// # Not Implemented
+    /// Currently will return an error with [`Status::NotImplemented`].
+    ///
+    /// See the tracking issue for details and subscribe for updates:
+    /// <https://github.com/ClickHouse/adbc_clickhouse/issues/19>
     fn prepare(&mut self) -> adbc_core::error::Result<()> {
         err_unimplemented!("ClickhouseStatement::prepare()")
     }
@@ -268,10 +288,20 @@ impl Statement for ClickhouseStatement {
         Ok(())
     }
 
+    /// # Not Implemented
+    /// Currently will return an error with [`Status::NotImplemented`].
+    ///
+    /// See the tracking issue for details and subscribe for updates:
+    /// <https://github.com/ClickHouse/adbc_clickhouse/issues/21>
     fn set_substrait_plan(&mut self, _plan: impl AsRef<[u8]>) -> adbc_core::error::Result<()> {
         err_unimplemented!("ClickhouseStatement::set_substrait_plan()")
     }
 
+    /// # Not Implemented
+    /// Currently will return an error with [`Status::NotImplemented`].
+    ///
+    /// See the tracking issue for details and subscribe for updates:
+    /// <https://github.com/ClickHouse/adbc_clickhouse/issues/20>
     fn cancel(&mut self) -> adbc_core::error::Result<()> {
         err_unimplemented!("ClickhouseStatement::cancel()")
     }
