@@ -22,6 +22,15 @@ However, the core query flow is supported:
 * Binding a statement in streaming insert mode with `Statement::bind_stream()`
 * Executing a statement with `Statement::execute()` or `Statement::execute_update()`
 
+Additionally, basic bulk ingest options are supported:
+
+* Setting `OptionStatement::TargetTable` (`"adbc.ingest.target_table"`) puts the statement into "bulk ingest" operation
+  and overrides `Statement::set_sql_query()`
+    * `Statement::bind()` or `Statement::bind_stream()` is then required to set the data to ingest
+* Other supported options:
+    * `OptionStatement::TargetDbSchema`: sets the target database in the ClickHouse server/cluster (qualifies `TargetTable`)
+    * `OptionStatement::IngestMode`: only `IngestMode::Append` (`"adbc.ingest.mode.append"`) is currently supported.
+
 
 ## Usage
 

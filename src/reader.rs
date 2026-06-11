@@ -1,60 +1,35 @@
 use crate::TokioContext;
 use arrow_array::{RecordBatch, RecordBatchReader};
-use arrow_buffer::Buffer;
-use arrow_ipc::reader::StreamDecoder;
 use arrow_schema::{ArrowError, Schema, SchemaRef};
-use clickhouse::query::BytesCursor;
-use std::ops::ControlFlow;
+use clickhouse_ext_arrow::ArrowCursor;
+
+use clickhouse::error::Error as ChError;
 
 pub(crate) struct ArrowStreamReader {
     tokio: TokioContext,
-    state: ReaderState,
+    cursor: ArrowCursor,
     schema: SchemaRef,
     first_batch: Option<RecordBatch>,
-}
-
-struct ReaderState {
-    cursor: BytesCursor,
-    decoder: StreamDecoder,
-    buffer: Option<Buffer>,
 }
 
 impl ArrowStreamReader {
     pub(crate) async fn begin(
         tokio: TokioContext,
-        cursor: BytesCursor,
+        mut cursor: ArrowCursor,
     ) -> Result<Self, ArrowError> {
         // We need to read the schema message so that `RecordBatchReader::schema()` is infallible.
-        let mut state = ReaderState {
-            cursor,
-            decoder: StreamDecoder::new(),
-            buffer: None,
-        };
+        // This entails reading up to, and storing, the first record batch if applicable.
+        let first_batch = cursor.next().await.map_err(ch_error_to_arrow_error)?;
 
-        let (schema, first_batch) = loop {
-            match state.try_read_batch().await? {
-                ControlFlow::Break(first_batch) => {
-                    // The schema should be populated.
-                    if let Some(schema) = state.decoder.schema() {
-                        break (schema, first_batch);
-                    }
-
-                    // ClickHouse omits the Arrow IPC schema header for statements with
-                    // no result set (DDL, most DML); surface as an empty result instead
-                    // of erroring. See https://github.com/ClickHouse/adbc_clickhouse/issues/49
-                    break (Schema::empty().into(), None);
-                }
-                ControlFlow::Continue(()) => {
-                    if let Some(schema) = state.decoder.schema() {
-                        break (schema, None);
-                    }
-                }
-            }
-        };
+        let schema = cursor
+            .schema()
+            // Empty result, possibly because the query was DDL; don't error.
+            // https://github.com/ClickHouse/adbc_clickhouse/issues/49
+            .unwrap_or_else(|| Schema::empty().into());
 
         Ok(Self {
             tokio: tokio.clone(),
-            state,
+            cursor,
             schema,
             first_batch,
         })
@@ -75,40 +50,19 @@ impl Iterator for ArrowStreamReader {
             return Some(Ok(first_batch));
         }
 
-        self.tokio.block_on(self.state.next_batch()).transpose()
+        self.tokio
+            .block_on(self.cursor.next())
+            .map_err(ch_error_to_arrow_error)
+            .transpose()
     }
 }
 
-impl ReaderState {
-    async fn next_batch(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
-        loop {
-            if let ControlFlow::Break(opt) = self.try_read_batch().await? {
-                return Ok(opt);
-            }
-        }
+fn ch_error_to_arrow_error(e: ChError) -> ArrowError {
+    if let ChError::Other(e) = e {
+        return e
+            .downcast::<ArrowError>()
+            .map_or_else(ArrowError::ExternalError, |e| *e);
     }
 
-    async fn try_read_batch(&mut self) -> Result<ControlFlow<Option<RecordBatch>>, ArrowError> {
-        while let Some(buffer) = self.buffer.as_mut().filter(|buf| !buf.is_empty()) {
-            if let Some(batch) = self.decoder.decode(buffer)? {
-                return Ok(ControlFlow::Break(Some(batch)));
-            }
-        }
-
-        if let Some(buffer) = read_buffer(&mut self.cursor).await? {
-            self.buffer = Some(buffer);
-            return Ok(ControlFlow::Continue(()));
-        }
-
-        self.decoder.finish()?;
-        Ok(ControlFlow::Break(None))
-    }
-}
-
-async fn read_buffer(cursor: &mut BytesCursor) -> Result<Option<Buffer>, ArrowError> {
-    cursor
-        .next()
-        .await
-        .map(|buf| buf.map(Into::into))
-        .map_err(|e| ArrowError::ExternalError(e.into()))
+    ArrowError::ExternalError(e.into())
 }

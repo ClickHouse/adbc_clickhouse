@@ -1,4 +1,9 @@
 use crate::reader::ArrowStreamReader;
+use adbc_core::constants::{
+    ADBC_INGEST_OPTION_MODE, ADBC_INGEST_OPTION_MODE_APPEND, ADBC_INGEST_OPTION_MODE_CREATE,
+    ADBC_INGEST_OPTION_MODE_CREATE_APPEND, ADBC_INGEST_OPTION_MODE_REPLACE,
+    ADBC_INGEST_OPTION_TARGET_DB_SCHEMA, ADBC_INGEST_OPTION_TARGET_TABLE,
+};
 use adbc_core::error::{Error, Status};
 use adbc_core::options::{OptionStatement, OptionValue};
 use adbc_core::{Optionable, PartitionedResult, Statement};
@@ -12,13 +17,18 @@ use arrow_array::types::{
     UInt32Type, UInt64Type,
 };
 use arrow_array::{Array, RecordBatch, RecordBatchIterator, RecordBatchReader};
-use arrow_schema::{DataType, Schema, TimeUnit};
+use arrow_schema::{ArrowError, DataType, Schema, TimeUnit};
 use clickhouse::Client;
 use clickhouse::query::Query;
 
 use crate::options::OptionValueExt;
 use crate::writer::ArrowStreamWriter;
 use crate::{AugmentedClient, Result, TokioContext, options, random_id};
+use clickhouse::_priv::sql_escape_identifier;
+use clickhouse_ext_arrow::ArrowQueryExt;
+
+#[cfg(doc)]
+use adbc_core::options::IngestMode;
 
 /// ClickHouse ADBC [`Statement`] implementation.
 ///
@@ -29,13 +39,34 @@ use crate::{AugmentedClient, Result, TokioContext, options, random_id};
 ///
 /// [Query parameters] are supported using [`Self::bind()`] to bind a single `RecordBatch`.
 ///
-/// Streaming inserts are supported with [`Self::bind_stream()`] and [`Self::execute_update()`].
-/// For streaming inserts, the SQL query must be of the form `INSERT INTO ... FORMAT ArrowStream`.
+/// # Bulk Ingest
+/// To insert data in bulk:
+///
+/// * Set [`OptionStatement::TargetTable`] via [`Self::set_option()`] to enable bulk ingest
+///   * Or set a SQL query of the form `INSERT INTO ... FORMAT ArrowStream`
+///     via [`Self::set_sql_query()`]
+///   * For qualified table names, use [`OptionStatement::TargetDbSchema`] to set the database
+///     portion of the table name, e.g. `foo` in `foo.bar`
+/// * Bind a batch of data using [`Self::bind()`] or a stream of data using [`Self::bind_stream()`]
+/// * Execute the statement with [`Self::execute_update()`]
+///
+/// [Query parameters]: https://clickhouse.com/docs/sql-reference/syntax#defining-and-using-query-parameters
 pub struct ClickhouseStatement {
     client: AugmentedClient,
     tokio: TokioContext,
-    sql_query: Option<String>,
+    mode: StatementMode,
     bind: Option<BindType>,
+}
+
+enum StatementMode {
+    Unset,
+    SqlQuery(String),
+    BulkIngest(IngestOptions),
+}
+
+struct IngestOptions {
+    target_schema: Option<String>,
+    target_table: Option<String>,
 }
 
 enum BindType {
@@ -50,7 +81,7 @@ impl ClickhouseStatement {
         Self {
             client,
             tokio,
-            sql_query: None,
+            mode: StatementMode::Unset,
             bind: None,
         }
     }
@@ -84,7 +115,8 @@ impl Statement for ClickhouseStatement {
     /// to [`Self::bind()`]. The iterator may only return one `RecordBatch`, which may contain
     /// at most one row.
     ///
-    /// If the SQL query is of the form `INSERT INTO ... FORMAT ArrowStream`,
+    /// If "bulk ingest" mode is configured with [`OptionStatement::TargetTable`],
+    /// or the SQL query is of the form `INSERT INTO ... FORMAT ArrowStream`,
     /// the iterator may return arbitrarily many `RecordBatch`es, and they may contain arbitrarily
     /// many rows. The data will be sent to ClickHouse in the [Arrow IPC format]
     /// and converted server-side.
@@ -104,68 +136,138 @@ impl Statement for ClickhouseStatement {
     /// Execute a query that returns a result set.
     ///
     /// # Errors
-    /// * If the SQL query is of the form `INSERT INTO ... FORMAT ArrowStream`,
+    /// * If "bulk ingest" mode is enabled via [`OptionStatement::TargetTable`],
+    ///   or the set SQL query is of the form `INSERT INTO ... FORMAT ArrowStream`,
     ///   as [`Self::execute_update()`] should be used instead.
     /// * If the `RecordBatch` bound with [`Self::bind()`] contains more than one row.
     /// * If the `RecordBatchReader` bound with [`Self::bind_stream()`] returns more than one
     ///   `RecordBatch` or a `RecordBatch` with more than one row.
-    fn execute(&mut self) -> adbc_core::error::Result<impl RecordBatchReader + Send> {
-        let sql = expect_sql_query(&self.sql_query)?;
+    fn execute(&mut self) -> Result<Box<dyn RecordBatchReader + Send + 'static>, Error> {
+        let sql = match &self.mode {
+            StatementMode::Unset => {
+                return Err(Error::with_message_and_status(
+                    "SQL query or bulk ingest options must be set before statement execution",
+                    Status::InvalidState,
+                ));
+            }
+            StatementMode::BulkIngest(_) => {
+                // There isn't a sensible thing to return here since bulk inserts aren't generally
+                // expected to return a result set; we could return an empty reader, but that would
+                // require adding special casing to `ArrowStreamReader`, or dynamic dispatch.
+                // https://arrow.apache.org/adbc/current/format/specification.html#bulk-data-ingestion
+                return Err(Error::with_message_and_status(
+                    "bulk ingest may only be used with `Statement::execute_update()`",
+                    Status::InvalidState,
+                ));
+            }
+            StatementMode::SqlQuery(sql) => {
+                if is_streaming_insert(sql) {
+                    // Same as above
+                    return Err(Error::with_message_and_status(
+                        "bulk ingest may only be used with `Statement::execute_update()`",
+                        Status::InvalidState,
+                    ));
+                }
 
-        if is_streaming_insert(sql) {
-            // There isn't a sensible thing to return here since bulk inserts aren't generally
-            // expected to return a result set; we could return an empty reader, but that would
-            // require adding special casing to `ArrowStreamReader`, or dynamic dispatch.
-            // https://arrow.apache.org/adbc/current/format/specification.html#bulk-data-ingestion
-            return Err(Error::with_message_and_status(
-                "streaming inserts may only be used with `Statement::execute_update()`",
-                Status::InvalidState,
-            ));
-        }
+                sql
+            }
+        };
 
-        fetch_blocking(&self.client, &self.tokio, sql, self.bind.take())
+        Ok(Box::new(fetch_blocking(
+            &self.client,
+            &self.tokio,
+            sql,
+            self.bind.take(),
+        )?))
     }
 
     /// Execute a query that does not return a result set.
     fn execute_update(&mut self) -> adbc_core::error::Result<Option<i64>> {
-        let sql = expect_sql_query(&self.sql_query)?;
+        let ingest = match &self.mode {
+            StatementMode::Unset => {
+                return Err(Error::with_message_and_status(
+                    "SQL query or bulk ingest options must be set before statement execution",
+                    Status::InvalidState,
+                ));
+            }
+            StatementMode::BulkIngest(options) => {
+                let schema = match &self.bind {
+                    Some(BindType::Stream(stream)) => stream.schema(),
+                    Some(BindType::Single(batch)) => batch.schema(),
+                    None => {
+                        return Err(Error::with_message_and_status(
+                            "bulk ingest requires `Statement::bind()` or `Statement::bind_stream`",
+                            Status::InvalidState,
+                        ));
+                    }
+                };
 
-        if is_streaming_insert(sql) {
-            let stream = match self.bind.take() {
-                Some(BindType::Stream(stream)) => stream,
-                Some(BindType::Single(batch)) => {
-                    let schema = batch.schema();
-                    // Converting to a trait object to reduce monomorphization overhead.
-                    Box::new(RecordBatchIterator::new([Ok(batch)], schema))
+                options.to_ingest(&schema)?
+            }
+            StatementMode::SqlQuery(sql) => {
+                if !is_streaming_insert(sql) {
+                    // FIXME: implement proper support for `X-ClickHouse-Summary` header
+                    execute_blocking(&self.client, &self.tokio, sql, self.bind.take())?;
+                    return Ok(None);
                 }
-                None => {
-                    return Err(Error::with_message_and_status(
-                        "streaming insert requires `Statement::bind()` or `Statement::bind_stream`",
-                        Status::InvalidState,
-                    ));
+
+                Ingest {
+                    sql: sql.into(),
+                    collection_name: None,
                 }
-            };
+            }
+        };
 
-            return execute_streaming_insert(&self.client, &self.tokio, sql, stream);
-        }
+        let stream = match self.bind.take() {
+            Some(BindType::Stream(stream)) => stream,
+            Some(BindType::Single(batch)) => {
+                let schema = batch.schema();
+                // Converting to a trait object to reduce monomorphization overhead.
+                Box::new(RecordBatchIterator::new([Ok(batch)], schema))
+            }
+            None => {
+                return Err(Error::with_message_and_status(
+                    "streaming insert requires `Statement::bind()` or `Statement::bind_stream`",
+                    Status::InvalidState,
+                ));
+            }
+        };
 
-        // FIXME: implement proper support for `X-ClickHouse-Summary` header
-        execute_blocking(&self.client, &self.tokio, sql, self.bind.take())?;
-        Ok(None)
+        execute_streaming_ingest(&self.client, &self.tokio, ingest, stream)
     }
 
+    /// # Not Implemented
+    /// Currently will return an error with [`Status::NotImplemented`].
+    ///
+    /// See the tracking issue for details and subscribe for updates:
+    /// <https://github.com/ClickHouse/adbc_clickhouse/issues/16>
     fn execute_schema(&mut self) -> adbc_core::error::Result<Schema> {
         err_unimplemented!("ClickhouseStatement::execute_schema()")
     }
 
+    /// # Not Implemented
+    /// Currently will return an error with [`Status::NotImplemented`].
+    ///
+    /// See the tracking issue for details and subscribe for updates:
+    /// <https://github.com/ClickHouse/adbc_clickhouse/issues/17>
     fn execute_partitions(&mut self) -> adbc_core::error::Result<PartitionedResult> {
         err_unimplemented!("ClickhouseStatement::execute_partitions()")
     }
 
+    /// # Not Implemented
+    /// Currently will return an error with [`Status::NotImplemented`].
+    ///
+    /// See the tracking issue for details and subscribe for updates:
+    /// <https://github.com/ClickHouse/adbc_clickhouse/issues/18>
     fn get_parameter_schema(&self) -> adbc_core::error::Result<Schema> {
         err_unimplemented!("ClickhouseStatement::get_parameter_schema()")
     }
 
+    /// # Not Implemented
+    /// Currently will return an error with [`Status::NotImplemented`].
+    ///
+    /// See the tracking issue for details and subscribe for updates:
+    /// <https://github.com/ClickHouse/adbc_clickhouse/issues/19>
     fn prepare(&mut self) -> adbc_core::error::Result<()> {
         err_unimplemented!("ClickhouseStatement::prepare()")
     }
@@ -175,16 +277,31 @@ impl Statement for ClickhouseStatement {
     /// For normal queries, e.g. `SELECT`, the `FORMAT` clause may be omitted.
     /// Use of any explicit format other than `ArrowStream` may result in an execution error.
     ///
-    /// For streaming inserts, the query should be of the form `INSERT INTO ... FORMAT ArrowStream`.
+    /// For bulk ingest, the query should be of the form `INSERT INTO ... FORMAT ArrowStream`.
+    ///
+    /// Alternatively, bulk ingest may be declaratively configured via [`OptionStatement`],
+    /// e.g. setting [`OptionStatement::TargetTable`], which overrides the set SQL query.
+    ///
+    /// Overwrites any previously set bulk ingest options, e.g. [`OptionStatement::TargetTable`].
     fn set_sql_query(&mut self, query: impl AsRef<str>) -> adbc_core::error::Result<()> {
-        self.sql_query = Some(query.as_ref().to_string());
+        self.mode = StatementMode::SqlQuery(query.as_ref().to_string());
         Ok(())
     }
 
+    /// # Not Implemented
+    /// Currently will return an error with [`Status::NotImplemented`].
+    ///
+    /// See the tracking issue for details and subscribe for updates:
+    /// <https://github.com/ClickHouse/adbc_clickhouse/issues/21>
     fn set_substrait_plan(&mut self, _plan: impl AsRef<[u8]>) -> adbc_core::error::Result<()> {
         err_unimplemented!("ClickhouseStatement::set_substrait_plan()")
     }
 
+    /// # Not Implemented
+    /// Currently will return an error with [`Status::NotImplemented`].
+    ///
+    /// See the tracking issue for details and subscribe for updates:
+    /// <https://github.com/ClickHouse/adbc_clickhouse/issues/20>
     fn cancel(&mut self) -> adbc_core::error::Result<()> {
         err_unimplemented!("ClickhouseStatement::cancel()")
     }
@@ -193,16 +310,63 @@ impl Statement for ClickhouseStatement {
 impl Optionable for ClickhouseStatement {
     type Option = OptionStatement;
 
+    /// Set one of the options from [`OptionStatement`]. Note that not all options are currently supported.
+    ///
+    /// # Supported [`OptionStatement`] Options
+    ///
+    /// * [`OptionStatement::TargetDbSchema`]: set the target database for "bulk ingest" operation.
+    ///   Overrides the SQL query previously set by [`Statement::set_sql_query()`].
+    ///   Requires [`OptionStatement::TargetTable`] to be set before execute.
+    ///   Automatically escaped.
+    /// * [`OptionStatement::TargetTable`]: set the target table name for "bulk ingest" operation.
+    ///   Overrides the SQL query previously set by [`Statement::set_sql_query()`].
+    ///   Automatically escaped.
+    /// * [`OptionStatement::IngestMode`]: set the ingest mode to use.
+    ///   Only [`IngestMode::Append`] ([`ADBC_INGEST_OPTION_MODE_APPEND`]) is currently supported,
+    ///   and is the default in "bulk ingest" operation.
+    ///   Setting any other ingest mode will return an error with [`Status::NotImplemented`]
+    /// * [`OptionStatement::Other`]: ClickHouse-specific options listed in the
+    ///   [`options`][crate::options] module. See that module for details.
+    ///   Any custom option string not explicitly supported will return
+    ///   an error with [`Status::InvalidArguments`].
+    ///
+    /// # Unsupported [`OptionStatement`] Options
+    ///
+    /// Explicitly unsupported options:
+    /// * [`OptionStatement::TargetCatalog`]: ClickHouse does not have a concept of "catalogs".
+    ///   Attempting to set this option will return an error with [`Status::InvalidArguments`].
+    ///
+    /// All other options will currently return an error with [`Status::NotImplemented`].
     fn set_option(
         &mut self,
         key: Self::Option,
         value: OptionValue,
     ) -> adbc_core::error::Result<()> {
         match key {
-            // OptionStatement::IngestMode => {}
-            // OptionStatement::TargetTable => {}
-            // OptionStatement::TargetCatalog => {}
-            // OptionStatement::TargetDbSchema => {}
+            OptionStatement::TargetTable => {
+                self.mode.make_ingest().target_table =
+                    Some(value.try_string(ADBC_INGEST_OPTION_TARGET_TABLE)?);
+            }
+
+            OptionStatement::TargetDbSchema => {
+                self.mode.make_ingest().target_schema =
+                    Some(value.try_string(ADBC_INGEST_OPTION_TARGET_DB_SCHEMA)?);
+            }
+
+            OptionStatement::TargetCatalog => {
+                return Err(Error::with_message_and_status(
+                    format!(
+                        "error setting option {:?} = {value:?}: ClickHouse does not have catalogs",
+                        key.as_ref()
+                    ),
+                    Status::InvalidArguments,
+                ));
+            }
+
+            OptionStatement::IngestMode => {
+                self.set_ingest_mode(&value.try_string(ADBC_INGEST_OPTION_MODE)?)?;
+            }
+
             // OptionStatement::Temporary => {}
             // OptionStatement::Incremental => {}
             // OptionStatement::Progress => {}
@@ -255,6 +419,27 @@ impl Optionable for ClickhouseStatement {
 }
 
 impl ClickhouseStatement {
+    fn set_ingest_mode(&mut self, mode_string: &str) -> Result<()> {
+        // FIXME: I've upstreamed this as `impl FromStr for IngestMode` but it's not released yet
+        // Should be in `adbc_core = "0.23.1"` or `0.24.0`
+        match mode_string {
+            ADBC_INGEST_OPTION_MODE_APPEND => {
+                // No-op
+                Ok(())
+            }
+            ADBC_INGEST_OPTION_MODE_CREATE
+            | ADBC_INGEST_OPTION_MODE_REPLACE
+            | ADBC_INGEST_OPTION_MODE_CREATE_APPEND => Err(Error::with_message_and_status(
+                format!("ingest mode {mode_string:?} not currently implemented"),
+                Status::NotImplemented,
+            )),
+            _ => Err(Error::with_message_and_status(
+                format!("unknown ingest mode {mode_string:?}"),
+                Status::InvalidArguments,
+            )),
+        }
+    }
+
     fn set_custom_option(&mut self, key: &str, value: OptionValue) -> Result<()> {
         match key {
             options::PRODUCT_INFO => {
@@ -278,14 +463,88 @@ impl ClickhouseStatement {
     }
 }
 
-#[inline(always)]
-fn expect_sql_query(sql_query: &Option<String>) -> Result<&str, Error> {
-    sql_query.as_deref().ok_or_else(|| {
-        Error::with_message_and_status(
-            "set_sql_query() must be called before bind() or execute()",
-            Status::InvalidState,
-        )
-    })
+impl StatementMode {
+    fn make_ingest(&mut self) -> &mut IngestOptions {
+        if let StatementMode::Unset | StatementMode::SqlQuery(_) = self {
+            *self = Self::BulkIngest(IngestOptions::default());
+        }
+
+        let StatementMode::BulkIngest(options) = self else {
+            unreachable!()
+        };
+
+        options
+    }
+}
+
+// `#[derive(Default)]`` would likely need to be un-converted later to set other defaults,
+// e.g. `IngestMode`.
+#[expect(clippy::derivable_impls)]
+impl Default for IngestOptions {
+    fn default() -> Self {
+        IngestOptions {
+            target_schema: None,
+            target_table: None,
+        }
+    }
+}
+
+impl IngestOptions {
+    fn to_ingest(&self, schema: &Schema) -> Result<Ingest> {
+        let table = self.target_table.as_ref().ok_or_else(|| {
+            Error::with_message_and_status(
+                format!(
+                    "option {ADBC_INGEST_OPTION_TARGET_TABLE:?} must be set to use bulk ingest"
+                ),
+                Status::InvalidState,
+            )
+        })?;
+
+        if schema.fields().is_empty() {
+            return Err(Error::with_message_and_status(
+                "bulk ingest schema is empty",
+                Status::InvalidState,
+            ));
+        }
+
+        let mut collection_name = String::new();
+
+        if let Some(ref schema) = self.target_schema {
+            sql_escape_identifier(schema, &mut collection_name)
+                .map_err(|e| ArrowError::ExternalError(e.into()))?;
+
+            collection_name.push('.');
+        }
+
+        sql_escape_identifier(table, &mut collection_name)
+            .map_err(|e| ArrowError::ExternalError(e.into()))?;
+
+        let mut sql = format!("INSERT INTO {collection_name}(");
+
+        let mut comma = false;
+        for field in schema.fields() {
+            if comma {
+                sql.push_str(", ");
+            }
+
+            sql_escape_identifier(field.name(), &mut sql)
+                .map_err(|e| ArrowError::ExternalError(e.into()))?;
+
+            comma = true;
+        }
+
+        sql.push_str(") FORMAT ArrowStream");
+
+        Ok(Ingest {
+            sql,
+            collection_name: Some(collection_name),
+        })
+    }
+}
+
+struct Ingest {
+    sql: String,
+    collection_name: Option<String>,
 }
 
 fn bind_query(mut query: Query, bind: Option<BindType>) -> Result<Query, Error> {
@@ -406,7 +665,14 @@ fn bind_scalar(query: Query, name: &str, array: &dyn Array) -> Result<Query, Err
         }
         DataType::Date32 => Ok(query.param(
             name,
-            Date32Type::to_naive_date(array.as_primitive::<Date32Type>().value(0)),
+            Date32Type::to_naive_date_opt(array.as_primitive::<Date32Type>().value(0)).ok_or_else(
+                || {
+                    Error::with_message_and_status(
+                        format!("Date32 value out of supported range for param {name:?}"),
+                        Status::InvalidArguments,
+                    )
+                },
+            )?,
         )),
         DataType::Date64 => Ok(query.param(
             name,
@@ -542,10 +808,10 @@ fn bind_scalar(query: Query, name: &str, array: &dyn Array) -> Result<Query, Err
     }
 }
 
-fn execute_streaming_insert(
+fn execute_streaming_ingest(
     client: &Client,
     tokio: &TokioContext,
-    sql: &str,
+    ingest: Ingest,
     mut stream: Box<dyn RecordBatchReader + Send>,
 ) -> Result<Option<i64>> {
     // In case any methods we invoke result in a call to Tokio
@@ -554,9 +820,15 @@ fn execute_streaming_insert(
     let _guard = tokio.enter();
 
     let insert = client
-        .insert_formatted_with(sql)
+        .insert_formatted_with(ingest.sql)
         // Clients will expect the insert to be fully committed by the time this returns (?)
-        .with_option("wait_end_of_query", "1");
+        .with_setting("wait_end_of_query", "1")
+        .buffered();
+
+    tracing::record_all!(
+        insert._priv_span(),
+        db.collection.name = ingest.collection_name,
+    );
 
     // Begins the request and writes the header
     let mut writer = ArrowStreamWriter::begin(tokio, &stream.schema(), insert)?;
@@ -585,7 +857,7 @@ fn fetch_blocking(
     sql: &str,
     bind: Option<BindType>,
 ) -> Result<ArrowStreamReader, Error> {
-    // `Query::fetch_bytes()` spawns a task internally.
+    // `ArrowQueryExt::fetch_arrow()` spawns a task internally.
     // This whole function could just be inside a `tokio.block_on()`
     // but that results in a larger generated future type
     let _guard = tokio.enter();
@@ -593,7 +865,7 @@ fn fetch_blocking(
     let mut query = client.query(sql);
     query = bind_query(query, bind)?;
 
-    let cursor = query.fetch_bytes("ArrowStream").map_err(|e| {
+    let cursor = query.fetch_arrow().map_err(|e| {
         Error::with_message_and_status(format!("error executing query: {e}"), Status::Internal)
     })?;
 
@@ -613,7 +885,7 @@ fn execute_blocking(
     // but that results in a larger generated future type
     let _guard = tokio.enter();
 
-    let mut query = client.query(sql).with_option("wait_end_of_query", "1");
+    let mut query = client.query(sql).with_setting("wait_end_of_query", "1");
     query = bind_query(query, bind)?;
 
     tokio.block_on(query.execute()).map_err(|e| {

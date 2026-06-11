@@ -38,7 +38,6 @@
 //! [`ring`]: https://github.com/briansmith/ring
 //! [`webpki-roots`]: https://github.com/rustls/webpki-roots
 use crate::options::{OptionValueExt, ProductInfo};
-use crate::reader::ArrowStreamReader;
 use adbc_core::error::{Error, Status};
 use adbc_core::options::{InfoCode, ObjectDepth, OptionConnection, OptionDatabase, OptionValue};
 use adbc_core::{Connection, Database, Driver, Optionable, schemas};
@@ -388,8 +387,8 @@ impl Connection for ClickhouseConnection {
     fn get_info(
         &self,
         _codes: Option<HashSet<InfoCode>>,
-    ) -> adbc_core::error::Result<impl RecordBatchReader + Send> {
-        err_unimplemented!("ClickhouseConnection::get_info()" -> ArrowStreamReader)
+    ) -> adbc_core::error::Result<Box<dyn RecordBatchReader + Send + 'static>> {
+        err_unimplemented!("ClickhouseConnection::get_info()" -> Box<dyn RecordBatchReader + Send + 'static>)
     }
 
     fn get_objects(
@@ -400,8 +399,8 @@ impl Connection for ClickhouseConnection {
         _table_name: Option<&str>,
         _table_type: Option<Vec<&str>>,
         _column_name: Option<&str>,
-    ) -> adbc_core::error::Result<impl RecordBatchReader + Send> {
-        err_unimplemented!("ClickhouseConnection::get_objects()" -> ArrowStreamReader)
+    ) -> adbc_core::error::Result<Box<dyn RecordBatchReader + Send + 'static>> {
+        err_unimplemented!("ClickhouseConnection::get_objects()" -> Box<dyn RecordBatchReader + Send + 'static>)
     }
 
     fn get_table_schema(
@@ -414,21 +413,25 @@ impl Connection for ClickhouseConnection {
             .block_on(schema::of_table(&self.client, db_schema, table_name))
     }
 
-    fn get_table_types(&self) -> adbc_core::error::Result<impl RecordBatchReader + Send> {
+    fn get_table_types(
+        &self,
+    ) -> adbc_core::error::Result<Box<dyn RecordBatchReader + Send + 'static>> {
         // It's not at all clear what this is supposed to return or how it's meant to be used.
         // All implementations either return `["table", "view"]` or a `NotImplemented` error.
         let records = record_batch!(("table_types", Utf8, ["table", "view"]))?;
 
         let schema = records.schema();
 
-        Ok(RecordBatchIterator::new([Ok(records)], schema))
+        Ok(Box::new(RecordBatchIterator::new([Ok(records)], schema)))
     }
 
-    fn get_statistic_names(&self) -> adbc_core::error::Result<impl RecordBatchReader + Send> {
-        Ok(RecordBatchIterator::new(
+    fn get_statistic_names(
+        &self,
+    ) -> adbc_core::error::Result<Box<dyn RecordBatchReader + Send + 'static>> {
+        Ok(Box::new(RecordBatchIterator::new(
             [],
             schemas::GET_STATISTIC_NAMES_SCHEMA.clone(),
-        ))
+        )))
     }
 
     fn get_statistics(
@@ -437,8 +440,8 @@ impl Connection for ClickhouseConnection {
         _db_schema: Option<&str>,
         _table_name: Option<&str>,
         _approximate: bool,
-    ) -> adbc_core::error::Result<impl RecordBatchReader + Send> {
-        err_unimplemented!("ClickhouseConnection::get_statistics()" -> ArrowStreamReader)
+    ) -> adbc_core::error::Result<Box<dyn RecordBatchReader + Send + 'static>> {
+        err_unimplemented!("ClickhouseConnection::get_statistics()" -> Box<dyn RecordBatchReader + Send + 'static>)
     }
 
     fn commit(&mut self) -> adbc_core::error::Result<()> {
@@ -458,8 +461,8 @@ impl Connection for ClickhouseConnection {
     fn read_partition(
         &self,
         _partition: impl AsRef<[u8]>,
-    ) -> adbc_core::error::Result<impl RecordBatchReader + Send> {
-        err_unimplemented!("ClickhouseConnection::read_partition()" -> ArrowStreamReader)
+    ) -> adbc_core::error::Result<Box<dyn RecordBatchReader + Send + 'static>> {
+        err_unimplemented!("ClickhouseConnection::read_partition()" -> Box<dyn RecordBatchReader + Send + 'static>)
     }
 }
 
@@ -560,17 +563,17 @@ impl AugmentedClient {
 
     fn set_option(&mut self, key: &str, value: String) {
         if let Some(modified_client) = &mut self.modified_client {
-            Arc::make_mut(modified_client).set_option(key, &value);
+            Arc::make_mut(modified_client).set_setting(key, &value);
         }
 
-        Arc::make_mut(&mut self.original_client).set_option(key, value);
+        Arc::make_mut(&mut self.original_client).set_setting(key, value);
     }
 
     fn get_option(&self, key: &str) -> Option<&str> {
         self.modified_client
             .as_deref()
             .unwrap_or(&self.original_client)
-            .get_option(key)
+            .get_setting(key)
     }
 }
 
