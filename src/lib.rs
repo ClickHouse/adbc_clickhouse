@@ -255,7 +255,7 @@ impl Database for ClickhouseDatabase {
         if connection.client.get_option("session_id").is_none() {
             connection
                 .client
-                .set_option("session_id", random_id("session"));
+                .set_setting("session_id", random_id("session"));
         }
 
         Ok(connection)
@@ -518,7 +518,14 @@ impl ClickhouseConnection {
                 self.client.set_product_info(&value.try_into()?);
             }
             options::SESSION_ID => {
-                self.client.set_option("session_id", value.try_string(key)?);
+                self.client
+                    .set_setting(options::as_setting::QUERY_ID, value.try_string(key)?);
+            }
+            options::OUTPUT_STRING_AS_STRING => {
+                self.client.set_setting(
+                    "output_format_arrow_string_as_string",
+                    value.try_string(key)?,
+                );
             }
             other => {
                 return Err(Error::with_message_and_status(
@@ -561,7 +568,7 @@ impl AugmentedClient {
         });
     }
 
-    fn set_option(&mut self, key: &str, value: String) {
+    fn set_setting(&mut self, key: &str, value: String) {
         if let Some(modified_client) = &mut self.modified_client {
             Arc::make_mut(modified_client).set_setting(key, &value);
         }

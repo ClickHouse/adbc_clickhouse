@@ -77,7 +77,7 @@ enum BindType {
 
 impl ClickhouseStatement {
     pub(crate) fn new(mut client: AugmentedClient, tokio: TokioContext) -> Self {
-        client.set_option("query_id", random_id("query"));
+        client.set_setting("query_id", random_id("query"));
 
         Self {
             client,
@@ -447,10 +447,18 @@ impl ClickhouseStatement {
                 self.client.set_product_info(&value.try_into()?);
             }
             options::SESSION_ID => {
-                self.client.set_option("session_id", value.try_string(key)?);
+                self.client
+                    .set_setting(options::as_setting::SESSION_ID, value.try_string(key)?);
             }
             options::QUERY_ID => {
-                self.client.set_option("query_id", value.try_string(key)?);
+                self.client
+                    .set_setting(options::as_setting::QUERY_ID, value.try_string(key)?);
+            }
+            options::OUTPUT_STRING_AS_STRING => {
+                self.client.set_setting(
+                    options::as_setting::OUTPUT_STRING_AS_STRING,
+                    value.try_string(key)?,
+                );
             }
             other => {
                 return Err(Error::with_message_and_status(
