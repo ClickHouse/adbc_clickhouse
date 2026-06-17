@@ -12,16 +12,16 @@ fn params_round_trip_correctly() {
             // ClickHouse Server returns extra metadata over
             // what's specified by the canonical extension type.
             //
-            // We have to set this first because otherwise `.with_metadata()`
-            // overwrites the metadata added by `.with_extension_type()`
+            // `.with_extension_type(arrow_schema::extensions::Uuid)`
+            // deletes the `ARROW:extension:metadata` key so equality wouldn't work.
             .with_metadata(
                 [
+                    ("ARROW:extension:name".to_string(), "arrow.uuid".to_string()),
                     ("ARROW:extension:metadata".to_string(), "".to_string()),
                     ("PARQUET:logical_type".to_string(), "UUID".to_string()),
                 ]
                 .into(),
-            )
-            .with_extension_type(arrow_schema::extension::Uuid),
+            ),
     ]));
 
     let params = RecordBatch::try_new(

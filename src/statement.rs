@@ -765,11 +765,10 @@ fn bind_scalar(query: Query, field: &Field, array: &dyn Array) -> Result<Query, 
         // DataType::Interval(_) => {}
 
         // Special recognition for the `arrow.uuid` type to bind as a UUID and not a bytestring.
-        DataType::FixedSizeBinary(16)
-            if field
-                .try_extension_type::<arrow_schema::extension::Uuid>()
-                .is_ok() =>
-        {
+        //
+        // This could be `.try_extension_type(arrow_schema::extensions::Uuid)`
+        // but in `arrow-schema = "58.3.0"` it rejects the metadata ClickHouse server returns.
+        DataType::FixedSizeBinary(16) if field.extension_type_name() == Some("arrow.uuid") => {
             let value = array.as_fixed_size_binary().value(0);
 
             Ok(query.param(
