@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 mod bulk_ingest;
 mod get_table_schema;
+mod params;
 
 // NOTE: tests run with the `current-thread` runtime by default.
 // Set `ADBC_CLICKHOUSE_TEST_MULTI_THREAD=1` to test with the `multi-thread` runtime.

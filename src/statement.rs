@@ -17,7 +17,7 @@ use arrow_array::types::{
     UInt32Type, UInt64Type,
 };
 use arrow_array::{Array, RecordBatch, RecordBatchIterator, RecordBatchReader};
-use arrow_schema::{ArrowError, DataType, Schema, TimeUnit};
+use arrow_schema::{ArrowError, DataType, Field, Schema, TimeUnit};
 use clickhouse::Client;
 use clickhouse::query::Query;
 
@@ -29,6 +29,7 @@ use clickhouse_ext_arrow::ArrowQueryExt;
 
 #[cfg(doc)]
 use adbc_core::options::IngestMode;
+use uuid::Uuid;
 
 /// ClickHouse ADBC [`Statement`] implementation.
 ///
@@ -598,13 +599,15 @@ fn bind_record_batch(mut query: Query, batch: RecordBatch) -> Result<Query, Erro
     let schema = batch.schema_ref();
 
     for (field, column) in schema.fields.iter().zip(batch.columns()) {
-        query = bind_scalar(query, field.name(), column)?;
+        query = bind_scalar(query, field, column)?;
     }
 
     Ok(query)
 }
 
-fn bind_scalar(query: Query, name: &str, array: &dyn Array) -> Result<Query, Error> {
+fn bind_scalar(query: Query, field: &Field, array: &dyn Array) -> Result<Query, Error> {
+    let name = field.name();
+
     if array.is_null(0) {
         // The exact type doesn't matter because it just serializes to a literal `NULL`
         return Ok(query.param(name, Option::<String>::None));
@@ -761,11 +764,49 @@ fn bind_scalar(query: Query, name: &str, array: &dyn Array) -> Result<Query, Err
         // There's also no corresponding type in `clickhouse-rs`
         // DataType::Interval(_) => {}
 
-        // FIXME: `ParamSerializer` in `clickhouse-rs` doesn't support `serialize_bytes()`
-        // DataType::Binary => {},
-        // DataType::FixedSizeBinary(_) => {}
-        // DataType::LargeBinary => {}
-        // DataType::BinaryView => {}
+        // Special recognition for the `arrow.uuid` type to bind as a UUID and not a bytestring.
+        DataType::FixedSizeBinary(16)
+            if field
+                .try_extension_type::<arrow_schema::extension::Uuid>()
+                .is_ok() =>
+        {
+            let value = array.as_fixed_size_binary().value(0);
+
+            Ok(query.param(
+                name,
+                Uuid::from_slice(value).map_err(|_| {
+                    // Technically any 16 arbitrary bytes is a valid UUID;
+                    // any unrecognized version is just treated as non-standard.
+                    //
+                    // The only possible error is that the slice is the wrong length,
+                    // which is technically a logic error or bug since we already checked the type,
+                    // but a panic here is potentially problematic since FFI is likely involved.
+                    Error::with_message_and_status(
+                        format!("expected 16 bytes for UUID parameter, got {}", value.len()),
+                        Status::InvalidArguments,
+                    )
+                })?,
+            ))
+        }
+
+        // Wrapping with `serde_bytes::Bytes` is required to serialize as a bytestring
+        // instead of an array of integers.
+        DataType::Binary => Ok(query.param(
+            name,
+            serde_bytes::Bytes::new(array.as_binary::<i32>().value(0)),
+        )),
+        DataType::FixedSizeBinary(_) => Ok(query.param(
+            name,
+            serde_bytes::Bytes::new(array.as_fixed_size_binary().value(0)),
+        )),
+        DataType::LargeBinary => Ok(query.param(
+            name,
+            serde_bytes::Bytes::new(array.as_binary::<i64>().value(0)),
+        )),
+        DataType::BinaryView => Ok(query.param(
+            name,
+            serde_bytes::Bytes::new(array.as_binary_view().value(0)),
+        )),
 
         // This is less annoying than `AsArray::as_string()`
         DataType::Utf8 => Ok(query.param(name, as_string_array(array).value(0))),
