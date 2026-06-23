@@ -252,6 +252,69 @@ impl Driver for ClickhouseDriver {
 }
 
 /// ClickHouse ADBC [`Database`] implementation.
+///
+/// # URLs/URIs
+/// This driver uses the [Clickhouse HTTP interface], and supports URLs with the `http://`,
+/// `https://` and `clickhouse://` schemes (for automatic driver loading by ADBC driver managers).
+///
+/// The `clickhouse://` scheme is rewritten to `https://` by default for security reasons.
+/// To override this, add `?protocol=http` to the end of the URL.
+///
+/// The default URL if none is set is `http://localhost:8432`.
+///
+/// Set the URL of the database to connect to using [`OptionDatabase::Uri`].
+///
+/// ## Example
+/// ```
+/// use adbc_clickhouse::ClickhouseDriver;
+/// use adbc_core::{Driver, Database, Optionable};
+/// use adbc_core::options::OptionDatabase;
+///
+/// let mut driver = ClickhouseDriver::init();
+///
+/// let mut database = driver.new_database().unwrap();
+///
+/// database.set_option(OptionDatabase::Uri, "https://localhost:8432".into()).unwrap();
+///
+/// // `https://` and `http://` schemes are not rewritten (except for normalization)
+/// assert_eq!(
+///     database.get_option_string(OptionDatabase::Uri).unwrap(),
+///     "https://localhost:8432/",
+/// );
+///
+/// database.set_option(OptionDatabase::Uri, "http://localhost:8432".into()).unwrap();
+///
+/// assert_eq!(
+///     database.get_option_string(OptionDatabase::Uri).unwrap(),
+///     "http://localhost:8432/",
+/// );
+///
+/// // `clickhouse://` is rewritten to `https://`
+/// database.set_option(OptionDatabase::Uri, "clickhouse://localhost:8432".into()).unwrap();
+///
+/// assert_eq!(
+///     database.get_option_string(OptionDatabase::Uri).unwrap(),
+///     "https://localhost:8432/",
+/// );
+///
+/// // Override to `http://` when TLS is not desired
+/// database.set_option(
+///     OptionDatabase::Uri,
+///     "clickhouse://localhost:8432?protocol=http".into()
+/// ).unwrap();
+///
+/// assert_eq!(
+///     database.get_option_string(OptionDatabase::Uri).unwrap(),
+///     "http://localhost:8432/",
+/// );
+///
+/// // Note: connects lazily on first query
+/// let mut connection = database.new_connection().unwrap();
+///
+/// # drop(connection);
+/// ```
+///
+/// [ClickHouse HTTP interface]: https://clickhouse.com/docs/interfaces/http
 pub struct ClickhouseDatabase {
     tokio: Option<TokioContext>,
     url: Option<Url>,
