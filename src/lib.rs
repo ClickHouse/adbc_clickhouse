@@ -252,10 +252,14 @@ impl Database for ClickhouseDatabase {
             connection.set_option(key, value)?;
         }
 
-        if connection.client.get_option("session_id").is_none() {
+        if connection
+            .client
+            .get_option(options::as_setting::SESSION_ID)
+            .is_none()
+        {
             connection
                 .client
-                .set_setting("session_id", random_id("session"));
+                .set_setting(options::as_setting::SESSION_ID, random_id("session"));
         }
 
         Ok(connection)
@@ -519,11 +523,11 @@ impl ClickhouseConnection {
             }
             options::SESSION_ID => {
                 self.client
-                    .set_setting(options::as_setting::QUERY_ID, value.try_string(key)?);
+                    .set_setting(options::as_setting::SESSION_ID, value.try_string(key)?);
             }
             options::OUTPUT_STRING_AS_STRING => {
                 self.client.set_setting(
-                    "output_format_arrow_string_as_string",
+                    options::as_setting::OUTPUT_STRING_AS_STRING,
                     value.try_string(key)?,
                 );
             }

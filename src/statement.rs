@@ -77,7 +77,7 @@ enum BindType {
 
 impl ClickhouseStatement {
     pub(crate) fn new(mut client: AugmentedClient, tokio: TokioContext) -> Self {
-        client.set_setting("query_id", random_id("query"));
+        client.set_setting(options::as_setting::QUERY_ID, random_id("query"));
 
         Self {
             client,
@@ -396,9 +396,11 @@ impl Optionable for ClickhouseStatement {
             // OptionStatement::Incremental => {}
             // OptionStatement::Progress => {}
             // OptionStatement::MaxProgress => {}
-            OptionStatement::Other(s) if s == options::QUERY_ID => {
-                Ok(self.client.get_option("query_id").unwrap_or("").into())
-            }
+            OptionStatement::Other(s) if s == options::QUERY_ID => Ok(self
+                .client
+                .get_option(options::as_setting::QUERY_ID)
+                .unwrap_or("")
+                .into()),
             other => Err(Error::with_message_and_status(
                 format!("unimplemented connection option: {:?}", other.as_ref()),
                 Status::NotImplemented,
