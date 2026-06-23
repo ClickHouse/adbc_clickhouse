@@ -107,6 +107,7 @@ use std::collections::HashSet;
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::runtime::{Handle, Runtime, RuntimeFlavor};
+use url::Url;
 
 macro_rules! err_unimplemented {
     ($path:literal) => {
@@ -236,7 +237,7 @@ impl Driver for ClickhouseDriver {
     ) -> adbc_core::error::Result<Self::DatabaseType> {
         let mut db = ClickhouseDatabase {
             tokio: self.tokio.clone(),
-            uri: None,
+            url: None,
             username: None,
             password: None,
             product_info: self.product_info.clone(),
@@ -253,7 +254,7 @@ impl Driver for ClickhouseDriver {
 /// ClickHouse ADBC [`Database`] implementation.
 pub struct ClickhouseDatabase {
     tokio: Option<TokioContext>,
-    uri: Option<String>,
+    url: Option<Url>,
     username: Option<String>,
     password: Option<String>,
     product_info: ProductInfo,
@@ -287,8 +288,8 @@ impl Database for ClickhouseDatabase {
             // to a different value at a lower level; `AugmentedClient` covers that.
             .with_product_info("adbc_clickhouse", env!("CARGO_PKG_VERSION"));
 
-        if let Some(url) = &self.uri {
-            client = client.with_url(url);
+        if let Some(url) = &self.url {
+            client = client.with_url(url.to_string());
         }
 
         if let Some(username) = &self.username {
@@ -334,7 +335,7 @@ impl Optionable for ClickhouseDatabase {
     ) -> adbc_core::error::Result<()> {
         match key {
             OptionDatabase::Uri => {
-                self.uri = Some(value.try_string(key)?);
+                self.set_url(value.try_string(key)?)?;
             }
             OptionDatabase::Username => {
                 self.username = Some(value.try_string(key)?);
@@ -357,27 +358,75 @@ impl Optionable for ClickhouseDatabase {
     }
 
     fn get_option_string(&self, key: Self::Option) -> adbc_core::error::Result<String> {
-        // FIXME: `Client` has no way to retrieve set options
-        err_unimplemented!("ClickhouseDatabase::get_option_string({key:?})")
+        match key {
+            OptionDatabase::Uri => Ok(self
+                .url
+                .as_ref()
+                .map_or_else(String::new, |url| url.to_string())),
+            OptionDatabase::Username => Ok(self.username.clone().unwrap_or_default()),
+            OptionDatabase::Password => Ok(self.password.clone().unwrap_or_default()),
+            OptionDatabase::Other(s) => self.get_custom_option(&s),
+            other => Err(Error::with_message_and_status(
+                format!("unimplemented database option {:?}", other.as_ref()),
+                Status::NotImplemented,
+            )),
+        }
     }
 
     fn get_option_bytes(&self, key: Self::Option) -> adbc_core::error::Result<Vec<u8>> {
-        // FIXME: `Client` has no way to retrieve set options
-        err_unimplemented!("ClickhouseDatabase::get_option_bytes({key:?})")
+        // There's no options that are specifically binary-only, so... *shrug*
+        self.get_option_string(key).map(String::into_bytes)
     }
 
     fn get_option_int(&self, key: Self::Option) -> adbc_core::error::Result<i64> {
-        // FIXME: `Client` has no way to retrieve set options
-        err_unimplemented!("ClickhouseDatabase::get_option_int({key:?})")
+        // Currently no database options that can be integers
+        Err(Error::with_message_and_status(
+            format!("option {:?} is not an integer", key.as_ref()),
+            Status::InvalidArguments,
+        ))
     }
 
     fn get_option_double(&self, key: Self::Option) -> adbc_core::error::Result<f64> {
-        // FIXME: `Client` has no way to retrieve set options
-        err_unimplemented!("ClickhouseDatabase::get_option_double({key:?})")
+        // Currently no database options that can be doubles
+        Err(Error::with_message_and_status(
+            format!("option {:?} is not a double", key.as_ref()),
+            Status::InvalidArguments,
+        ))
     }
 }
 
 impl ClickhouseDatabase {
+    fn set_url(&mut self, url: String) -> Result<()> {
+        const ALLOWED_SCHEMES: &[&str] = &["http", "https", "clickhouse"];
+
+        let url = url.parse::<Url>().map_err(|e| {
+            Error::with_message_and_status(format!("invalid URL: {e}"), Status::InvalidArguments)
+        })?;
+
+        let url = match url.scheme() {
+            "http" | "https" => url, // No-op
+            "clickhouse" => rewrite_url(url)?,
+            "" => {
+                return Err(Error::with_message_and_status(
+                    format!("URL scheme cannot be empty, must be one of {ALLOWED_SCHEMES:?}"),
+                    Status::InvalidArguments,
+                ));
+            }
+            scheme => {
+                return Err(Error::with_message_and_status(
+                    format!(
+                        "unrecognized URL scheme: {scheme:?}, expected one of {ALLOWED_SCHEMES:?}"
+                    ),
+                    Status::InvalidArguments,
+                ));
+            }
+        };
+
+        self.url = Some(url);
+
+        Ok(())
+    }
+
     fn set_custom_option(&mut self, key: &str, value: OptionValue) -> Result<()> {
         match key {
             options::PRODUCT_INFO => {
@@ -392,6 +441,16 @@ impl ClickhouseDatabase {
         }
 
         Ok(())
+    }
+
+    fn get_custom_option(&self, key: &str) -> Result<String> {
+        match key {
+            options::PRODUCT_INFO => Ok(self.product_info.to_string()),
+            other => Err(Error::with_message_and_status(
+                format!("unknown database option {other:?}"),
+                Status::InvalidArguments,
+            )),
+        }
     }
 }
 
@@ -703,38 +762,144 @@ pub(crate) fn random_id(namespace: &str) -> String {
     out
 }
 
-#[test]
-fn test_set_product_info() {
-    let mut driver = ClickhouseDriver::init();
+fn rewrite_url(url: Url) -> Result<Url> {
+    const ALLOWED_OVERRIDES: &[&str] = &["http", "https"];
 
-    let db = driver
-        .new_database_with_opts([(
-            options::PRODUCT_INFO.into(),
-            "foo/1.0.0 bar/0.12.34-alpha.1".into(),
-        )])
-        .unwrap();
+    let mut protocol_override = None;
 
-    assert!(
-        db.product_info
-            .pairs()
-            .eq([("foo", "1.0.0"), ("bar", "0.12.34-alpha.1")])
-    );
+    let query_pairs = url
+        .query_pairs()
+        .filter_map(|(key, value)| {
+            if key == "protocol" {
+                protocol_override = Some(value);
+                return None;
+            }
 
-    // `clickhouse::Client` doesn't provide any way to read back the product info
-    // so the rest of this test is just ensuring that it _can_ be set
-    let mut conn = db
-        .new_connection_with_opts([(
-            options::PRODUCT_INFO.into(),
-            "foo/2.0.0 bar/1.23.45-beta.1".into(),
-        )])
-        .unwrap();
+            Some((key, value))
+        })
+        .collect::<Vec<_>>();
 
-    // FIXME: https://github.com/apache/arrow-adbc/issues/3913
-    let mut statement = conn.new_statement().unwrap();
-    statement
-        .set_option(
-            options::PRODUCT_INFO.into(),
-            "foo/3.0.0 bar/2.34.56-rc.1".into(),
+    if let Some(protocol_override) = &protocol_override
+        && !ALLOWED_OVERRIDES.contains(&&**protocol_override)
+    {
+        return Err(Error::with_message_and_status(
+            format!(
+                "disallowed protocol override: {protocol_override:?}, allowed overrides: {ALLOWED_OVERRIDES:?}"
+            ),
+            Status::InvalidArguments,
+        ));
+    }
+
+    // `.set_scheme()` doesn't allow changing `clickhouse://` to `https://`
+    // so we need to implement our own override method.
+    // There's a PR for this that's been open since August 2025 with no review comments:
+    // https://github.com/servo/rust-url/pull/1073
+    let mut new_url = Url::parse(&format!(
+        "{scheme}{after_scheme}",
+        scheme = protocol_override.as_deref().unwrap_or("https"),
+        // Everything between the scheme and the query (host, port, username, password, path)
+        after_scheme = &url[url::Position::AfterScheme..url::Position::AfterPath],
+    ))
+    .map_err(|e| {
+        Error::with_message_and_status(
+            format!("unable to rewrite URL: {e}"),
+            Status::InvalidArguments,
         )
-        .unwrap();
+    })?;
+
+    // `Url::parse_with_params()` appends `?` even if the iterator is empty
+    if !query_pairs.is_empty() {
+        new_url.query_pairs_mut().extend_pairs(query_pairs).finish();
+    }
+
+    // ClickHouse HTTP URLs don't really use fragments but this shouldn't be harmful.
+    new_url.set_fragment(url.fragment());
+
+    Ok(new_url)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{ClickhouseDriver, options};
+    use adbc_core::options::OptionDatabase;
+    use adbc_core::{Connection, Database, Driver, Optionable};
+
+    #[test]
+    fn test_set_product_info() {
+        let mut driver = ClickhouseDriver::init();
+
+        let db = driver
+            .new_database_with_opts([(
+                options::PRODUCT_INFO.into(),
+                "foo/1.0.0 bar/0.12.34-alpha.1".into(),
+            )])
+            .unwrap();
+
+        assert!(
+            db.product_info
+                .pairs()
+                .eq([("foo", "1.0.0"), ("bar", "0.12.34-alpha.1")])
+        );
+
+        // `clickhouse::Client` doesn't provide any way to read back the product info
+        // so the rest of this test is just ensuring that it _can_ be set
+        let mut conn = db
+            .new_connection_with_opts([(
+                options::PRODUCT_INFO.into(),
+                "foo/2.0.0 bar/1.23.45-beta.1".into(),
+            )])
+            .unwrap();
+
+        // FIXME: https://github.com/apache/arrow-adbc/issues/3913
+        let mut statement = conn.new_statement().unwrap();
+        statement
+            .set_option(
+                options::PRODUCT_INFO.into(),
+                "foo/3.0.0 bar/2.34.56-rc.1".into(),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn test_set_uri() {
+        let mut driver = ClickhouseDriver::init();
+
+        let urls = [
+            ("http://localhost:8432", "http://localhost:8432/"),
+            ("https://localhost:8432", "https://localhost:8432/"),
+            ("clickhouse://localhost:8432", "https://localhost:8432/"),
+            (
+                "clickhouse://localhost:8432?protocol=http",
+                "http://localhost:8432/",
+            ),
+            (
+                "clickhouse://localhost:8432/predefined_query_handler?protocol=http",
+                "http://localhost:8432/predefined_query_handler",
+            ),
+            (
+                "clickhouse://localhost:8432/predefined_query_handler?protocol=http&session_id=asdf1234",
+                "http://localhost:8432/predefined_query_handler?session_id=asdf1234",
+            ),
+            // Preserves fragment (not used by HTTP interface but possibly useful for metadata)
+            (
+                "clickhouse://localhost:8432/predefined_query_handler?protocol=http&session_id=asdf1234#some-fragment",
+                "http://localhost:8432/predefined_query_handler?session_id=asdf1234#some-fragment",
+            ),
+        ];
+
+        for (original_url, expected_url) in urls {
+            let mut database = driver.new_database().unwrap();
+
+            database
+                .set_option(OptionDatabase::Uri, original_url.into())
+                .unwrap();
+
+            let rewritten_url = database.get_option_string(OptionDatabase::Uri).unwrap();
+
+            assert_eq!(
+                rewritten_url, expected_url,
+                "original URL: {original_url:?}"
+            );
+        }
+    }
 }

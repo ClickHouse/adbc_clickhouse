@@ -42,6 +42,8 @@ serde_bytes = "0.11.19"
 
 tracing = "0.1.44"
 
+url = "2.5.8"
+
 [dependencies.clickhouse]
 version = "0.15.1"
 
