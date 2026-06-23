@@ -140,7 +140,8 @@ pub const QUERY_ID: &str = "clickhouse.client.query_id";
 
 /// Sets whether ClickHouse reports all `String` values as Arrow UTF-8 strings (enabled by default).
 ///
-/// Set to `"0"` to have ClickHouse output all `String` types as binary instead.
+/// Set to `"false"` (ADBC convention) or `"0"` (ClickHouse convention) to have ClickHouse output
+/// all `String` types as binary instead.
 ///
 /// Maps to the [`output_format_arrow_string_as_string`] setting.
 ///
@@ -159,7 +160,7 @@ pub const QUERY_ID: &str = "clickhouse.client.query_id";
 /// without any validation, which could result in deserialization errors at runtime if a string
 /// is encountered that is not valid UTF-8.
 ///
-/// Setting this to `"0"` causes ClickHouse to report all `String` values
+/// Setting this to `"false"`/`"0"` causes ClickHouse to report all `String` values
 /// as Arrow binary strings instead.
 pub const OUTPUT_STRING_AS_STRING: &str = "clickhouse.client.output_string_as_string";
 

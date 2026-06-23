@@ -93,8 +93,8 @@
 //! a fixed-size UTF-8 string type.
 //!
 //! If your schema may contain `String` values that are **not** valid UTF-8,
-//! set option [`options::OUTPUT_STRING_AS_STRING`] to `"0"` to make ClickHouse report all strings
-//! as binary strings instead. This may be set at the connection or statement level.
+//! set option [`options::OUTPUT_STRING_AS_STRING`] to `"false"` to make ClickHouse report
+//! all strings as binary strings instead. This may be set at the connection or statement level.
 use crate::options::{OptionValueExt, ProductInfo};
 use adbc_core::error::{Error, Status};
 use adbc_core::options::{InfoCode, ObjectDepth, OptionConnection, OptionDatabase, OptionValue};

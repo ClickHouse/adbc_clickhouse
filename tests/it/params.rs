@@ -68,7 +68,8 @@ fn binary_strings_round_trip() {
         // since ClickHouse doesn't have a separate binary type
         .set_option(
             OptionStatement::Other(adbc_clickhouse::options::OUTPUT_STRING_AS_STRING.into()),
-            "0".into(),
+            // ADBC convention
+            "false".into(),
         )
         .unwrap();
 
