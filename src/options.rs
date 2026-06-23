@@ -147,7 +147,7 @@ pub const QUERY_ID: &str = "clickhouse.client.query_id";
 /// May be set on [`ClickhouseConnection`] or [`ClickhouseStatement`].
 ///
 /// **Note**: `FixedString(N)` is always reported as binary because Arrow does not have
-/// a fixed-size string type.
+/// a fixed-size UTF-8 string type.
 ///
 /// [`output_format_arrow_string_as_string`]: https://clickhouse.com/docs/operations/settings/formats#output_format_arrow_string_as_string
 ///

@@ -21,9 +21,9 @@
 //! [the `clickhouse` crate](https://github.com/ClickHouse/clickhouse-rs?tab=readme-ov-file#tls) it uses under the hood:
 //!
 //! * `native-tls`: use the native TLS implementation for the platform
-//! * OpenSSL on Linux
-//! * SChannel on Windows
-//! * Secure Transport on macOS
+//!   * OpenSSL on Linux
+//!   * SChannel on Windows
+//!   * Secure Transport on macOS
 //! * `rustls-tls`: enables both `rustls-tls-aws-lc` and `rustls-tls-webpki-roots`
 //! * `rustls-tls-aws-lc`: use [Rustls] with the [`aws-lc`] cryptography provider
 //! * `rustls-tls-ring`: use [Rustls] with the [`ring`] cryptography provider
@@ -37,6 +37,64 @@
 //! [`aws-lc`]: https://github.com/aws/aws-lc-rs
 //! [`ring`]: https://github.com/briansmith/ring
 //! [`webpki-roots`]: https://github.com/rustls/webpki-roots
+//!
+//! # Data Type Support
+//! This driver supports most of the Arrow datatypes that ClickHouse itself supports, as Arrow data
+//! is fed directly to the server.
+//!
+//! The Arrow types supported by ClickHouse are covered in the
+//! [`Arrow` format documentation][arrow-format]. Technically, this driver uses the [`ArrowStream`]
+//! format instead, but the datatype support is the same; the only difference is that the
+//! message framing is designed for streaming data vs random access from a file.
+//!
+//! [arrow-format]: https://clickhouse.com/docs/interfaces/formats/Arrow#data-types-matching
+//! [`ArrowStream`]: https://clickhouse.com/docs/interfaces/formats/ArrowStream
+//!
+//! ## Bind Parameter Limitations
+//! The only place this driver imposes specific limitations for datatype support is in
+// `[ClickhouseStatement::bind()]` refused to resolve to the trait method
+//! [binding query parameters][ClickhouseStatement#method.bind], because the values need to be converted
+//! to ClickHouse types client-side and formatted as literals to be sent alongside the query.
+//!
+//! Currently, for binding parameters, only scalar types are supported, with a few exceptions
+//! (see `bind_scalar()` in `src/statement.rs` for the actual mappings):
+//!
+//! The `Float16` type in Arrow does not have an exact equivalent in ClickHouse.
+//! CH's `BFloat16` is a different type that trades mantissa precision for more exponent bits,
+//! so the two types are not strictly compatible.
+//!
+//! [ClickHouse's `Interval` type][ch-interval] is not exactly the same as
+//! [Arrow's `Interval` type][arrow-interval]. The former only allows one "level" of precision
+//! at a time, but the latter has three "modes" all using mixed units; this means mapping the latter
+//! to the former would almost always either lose precision or be forced to reject
+//! intervals with mixed units.
+//!
+//! Instead, ClickHouse server actually maps CH's `Interval` type to
+//! [Arrow's `Duration` type][arrow-duration], but only for intervals with a precision of
+//! one second or smaller, and _rejects_ Arrow's `Interval` type on insert.
+//!
+//! This driver recognizes the [`arrow.uuid`] extension type, and will be bind it as a literal UUID
+//! instead of a fixed-size binary string.
+//!
+//! [ch-interval]: https://clickhouse.com/docs/sql-reference/data-types/special-data-types/interval
+//! [arrow-interval]: https://github.com/apache/arrow/blob/f4860536b100c480cd5015941c9ec4442a61eae0/format/Schema.fbs#L399-L419
+//! [arrow-duration]: https://github.com/apache/arrow/blob/f4860536b100c480cd5015941c9ec4442a61eae0/format/Schema.fbs#L421-L436
+//! [`arrow.uuid`]: https://arrow.apache.org/docs/format/CanonicalExtensions.html#uuid
+//!
+//! ## Strings are assumed to be UTF-8 by default.
+//! ClickHouse's type system does not differentiate between binary strings and UTF-8 strings.
+//! While the `String` type is _conventionally_ UTF-8, this is not enforced.
+//!
+//! For convenience, ClickHouse defaults to reporting all `String` values as Arrow UTF-8 strings
+//! without any validation, which could result in deserialization errors at runtime if a string
+//! is encountered that is not valid UTF-8.
+//!
+//! `FixedString(N)` is always reported as binary because Arrow does not have
+//! a fixed-size UTF-8 string type.
+//!
+//! If your schema may contain `String` values that are **not** valid UTF-8,
+//! set option [`options::OUTPUT_STRING_AS_STRING`] to `"0"` to make ClickHouse report all strings
+//! as binary strings instead. This may be set at the connection or statement level.
 use crate::options::{OptionValueExt, ProductInfo};
 use adbc_core::error::{Error, Status};
 use adbc_core::options::{InfoCode, ObjectDepth, OptionConnection, OptionDatabase, OptionValue};

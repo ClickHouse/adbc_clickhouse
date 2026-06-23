@@ -93,15 +93,22 @@ impl Statement for ClickhouseStatement {
     ///
     /// If the SQL contains a normal query (e.g. `SELECT`), the `RecordBatch` may have
     /// no more than one row. Types will be converted client-side to their ClickHouse equivalents
-    /// and bound as [query parameters]. Most of the basic types are supported.
-    /// See `bind_scalar()` in this source file for details.
+    /// and bound as [query parameters].
     ///
-    /// If the SQL is a streaming insert of the form `INSERT INTO ... FORMAT ArrowStream`,
+    /// If "bulk ingest" mode is configured with [`OptionStatement::TargetTable`],
+    /// or the SQL query is of the form `INSERT INTO ... FORMAT ArrowStream`,
     /// the `RecordBatch` may have arbitrary many rows. The data will be sent to ClickHouse in
     /// the [Arrow IPC format] and converted server-side.
     ///
     /// This may be called before or after [`Self::set_sql_query()`]. Binding is performed
-    /// during the call to [`Self::execute()`] or [`Self::execute_update()`]`.
+    /// during the call to [`Self::execute()`] or [`Self::execute_update()`].
+    ///
+    /// # Data Type Support
+    /// Most Arrow scalar types are supported, with some exceptions.
+    /// See [the crate root docs][crate#data-type-support] for remarks and limitations on
+    /// the datatypes supported by this API.
+    ///
+    /// See also `bind_scalar()` in `src/statement.rs` for the actual implementation.
     ///
     /// [query parameters]: https://clickhouse.com/docs/sql-reference/syntax#defining-and-using-query-parameters
     /// [Arrow IPC format]: https://arrow.apache.org/docs/format/Columnar.html#format-ipc
@@ -124,6 +131,13 @@ impl Statement for ClickhouseStatement {
     ///
     /// This may be called before or after [`Self::set_sql_query()`]. Binding is performed
     /// during the call to [`Self::execute()`] or [`Self::execute_update()`]`.
+    ///
+    /// # Data Type Support
+    /// Most Arrow scalar types are supported, with some exceptions.
+    /// See [the crate root docs][crate#data-type-support] for remarks and limitations on
+    /// the datatypes supported by this API.
+    ///
+    /// See also `bind_scalar()` in `src/statement.rs` for the actual implementation.
     ///
     /// [Arrow IPC format]: https://arrow.apache.org/docs/format/Columnar.html#format-ipc
     fn bind_stream(
