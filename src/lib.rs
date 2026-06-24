@@ -965,4 +965,32 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_set_uri_rejects_invalid() {
+        let mut driver = ClickhouseDriver::init();
+        let mut database = driver.new_database().unwrap();
+
+        let err = database
+            .set_option(OptionDatabase::Uri, "localhost:8123".into())
+            .unwrap_err();
+
+        assert_eq!(err.status, adbc_core::error::Status::InvalidArguments);
+        assert!(
+            err.message.contains("unrecognized URL scheme"),
+            "unexpected message: {:?}",
+            err.message
+        );
+
+        let err = database
+            .set_option(OptionDatabase::Uri, "localhost".into())
+            .unwrap_err();
+
+        assert_eq!(err.status, adbc_core::error::Status::InvalidArguments);
+        assert!(
+            err.message.contains("invalid URL"),
+            "unexpected message: {:?}",
+            err.message
+        );
+    }
 }
