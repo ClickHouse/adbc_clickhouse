@@ -260,7 +260,7 @@ impl Driver for ClickhouseDriver {
 /// The `clickhouse://` scheme is rewritten to `https://` by default for security reasons.
 /// To override this, add `?protocol=http` to the end of the URL.
 ///
-/// The default URL if none is set is `http://localhost:8432`.
+/// The default URL if none is set is `http://localhost:8123`.
 ///
 /// Set the URL of the database to connect to using [`OptionDatabase::Uri`].
 ///
@@ -274,38 +274,38 @@ impl Driver for ClickhouseDriver {
 ///
 /// let mut database = driver.new_database().unwrap();
 ///
-/// database.set_option(OptionDatabase::Uri, "https://localhost:8432".into()).unwrap();
+/// database.set_option(OptionDatabase::Uri, "https://localhost:8123".into()).unwrap();
 ///
 /// // `https://` and `http://` schemes are not rewritten (except for normalization)
 /// assert_eq!(
 ///     database.get_option_string(OptionDatabase::Uri).unwrap(),
-///     "https://localhost:8432/",
+///     "https://localhost:8123/",
 /// );
 ///
-/// database.set_option(OptionDatabase::Uri, "http://localhost:8432".into()).unwrap();
+/// database.set_option(OptionDatabase::Uri, "http://localhost:8123".into()).unwrap();
 ///
 /// assert_eq!(
 ///     database.get_option_string(OptionDatabase::Uri).unwrap(),
-///     "http://localhost:8432/",
+///     "http://localhost:8123/",
 /// );
 ///
 /// // `clickhouse://` is rewritten to `https://`
-/// database.set_option(OptionDatabase::Uri, "clickhouse://localhost:8432".into()).unwrap();
+/// database.set_option(OptionDatabase::Uri, "clickhouse://localhost:8123".into()).unwrap();
 ///
 /// assert_eq!(
 ///     database.get_option_string(OptionDatabase::Uri).unwrap(),
-///     "https://localhost:8432/",
+///     "https://localhost:8123/",
 /// );
 ///
 /// // Override to `http://` when TLS is not desired
 /// database.set_option(
 ///     OptionDatabase::Uri,
-///     "clickhouse://localhost:8432?protocol=http".into()
+///     "clickhouse://localhost:8123?protocol=http".into()
 /// ).unwrap();
 ///
 /// assert_eq!(
 ///     database.get_option_string(OptionDatabase::Uri).unwrap(),
-///     "http://localhost:8432/",
+///     "http://localhost:8123/",
 /// );
 ///
 /// // Note: connects lazily on first query
@@ -928,25 +928,25 @@ mod tests {
         let mut driver = ClickhouseDriver::init();
 
         let urls = [
-            ("http://localhost:8432", "http://localhost:8432/"),
-            ("https://localhost:8432", "https://localhost:8432/"),
-            ("clickhouse://localhost:8432", "https://localhost:8432/"),
+            ("http://localhost:8123", "http://localhost:8123/"),
+            ("https://localhost:8123", "https://localhost:8123/"),
+            ("clickhouse://localhost:8123", "https://localhost:8123/"),
             (
-                "clickhouse://localhost:8432?protocol=http",
-                "http://localhost:8432/",
+                "clickhouse://localhost:8123?protocol=http",
+                "http://localhost:8123/",
             ),
             (
-                "clickhouse://localhost:8432/predefined_query_handler?protocol=http",
-                "http://localhost:8432/predefined_query_handler",
+                "clickhouse://localhost:8123/predefined_query_handler?protocol=http",
+                "http://localhost:8123/predefined_query_handler",
             ),
             (
-                "clickhouse://localhost:8432/predefined_query_handler?protocol=http&session_id=asdf1234",
-                "http://localhost:8432/predefined_query_handler?session_id=asdf1234",
+                "clickhouse://localhost:8123/predefined_query_handler?protocol=http&session_id=asdf1234",
+                "http://localhost:8123/predefined_query_handler?session_id=asdf1234",
             ),
             // Preserves fragment (not used by HTTP interface but possibly useful for metadata)
             (
-                "clickhouse://localhost:8432/predefined_query_handler?protocol=http&session_id=asdf1234#some-fragment",
-                "http://localhost:8432/predefined_query_handler?session_id=asdf1234#some-fragment",
+                "clickhouse://localhost:8123/predefined_query_handler?protocol=http&session_id=asdf1234#some-fragment",
+                "http://localhost:8123/predefined_query_handler?session_id=asdf1234#some-fragment",
             ),
         ];
 
