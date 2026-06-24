@@ -130,7 +130,7 @@ impl Statement for ClickhouseStatement {
     /// and converted server-side.
     ///
     /// This may be called before or after [`Self::set_sql_query()`]. Binding is performed
-    /// during the call to [`Self::execute()`] or [`Self::execute_update()`]`.
+    /// during the call to [`Self::execute()`] or [`Self::execute_update()`].
     ///
     /// # Data Type Support
     /// Most Arrow scalar types are supported, with some exceptions.

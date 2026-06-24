@@ -73,7 +73,7 @@
 //! [Arrow's `Duration` type][arrow-duration], but only for intervals with a precision of
 //! one second or smaller, and _rejects_ Arrow's `Interval` type on insert.
 //!
-//! This driver recognizes the [`arrow.uuid`] extension type, and will be bind it as a literal UUID
+//! This driver recognizes the [`arrow.uuid`] extension type, and will bind it as a literal UUID
 //! instead of a fixed-size binary string.
 //!
 //! [ch-interval]: https://clickhouse.com/docs/sql-reference/data-types/special-data-types/interval
