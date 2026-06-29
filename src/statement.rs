@@ -17,7 +17,7 @@ use arrow_array::types::{
     UInt32Type, UInt64Type,
 };
 use arrow_array::{Array, RecordBatch, RecordBatchIterator, RecordBatchReader};
-use arrow_schema::{ArrowError, DataType, Schema, TimeUnit};
+use arrow_schema::{ArrowError, DataType, Field, Schema, TimeUnit};
 use clickhouse::Client;
 use clickhouse::query::Query;
 
@@ -29,6 +29,7 @@ use clickhouse_ext_arrow::ArrowQueryExt;
 
 #[cfg(doc)]
 use adbc_core::options::IngestMode;
+use uuid::Uuid;
 
 /// ClickHouse ADBC [`Statement`] implementation.
 ///
@@ -76,7 +77,7 @@ enum BindType {
 
 impl ClickhouseStatement {
     pub(crate) fn new(mut client: AugmentedClient, tokio: TokioContext) -> Self {
-        client.set_option("query_id", random_id("query"));
+        client.set_setting(options::as_setting::QUERY_ID, random_id("query"));
 
         Self {
             client,
@@ -92,15 +93,22 @@ impl Statement for ClickhouseStatement {
     ///
     /// If the SQL contains a normal query (e.g. `SELECT`), the `RecordBatch` may have
     /// no more than one row. Types will be converted client-side to their ClickHouse equivalents
-    /// and bound as [query parameters]. Most of the basic types are supported.
-    /// See `bind_scalar()` in this source file for details.
+    /// and bound as [query parameters].
     ///
-    /// If the SQL is a streaming insert of the form `INSERT INTO ... FORMAT ArrowStream`,
+    /// If "bulk ingest" mode is configured with [`OptionStatement::TargetTable`],
+    /// or the SQL query is of the form `INSERT INTO ... FORMAT ArrowStream`,
     /// the `RecordBatch` may have arbitrary many rows. The data will be sent to ClickHouse in
     /// the [Arrow IPC format] and converted server-side.
     ///
     /// This may be called before or after [`Self::set_sql_query()`]. Binding is performed
-    /// during the call to [`Self::execute()`] or [`Self::execute_update()`]`.
+    /// during the call to [`Self::execute()`] or [`Self::execute_update()`].
+    ///
+    /// # Data Type Support
+    /// Most Arrow scalar types are supported, with some exceptions.
+    /// See [the crate root docs][crate#data-type-support] for remarks and limitations on
+    /// the datatypes supported by this API.
+    ///
+    /// See also `bind_scalar()` in `src/statement.rs` for the actual implementation.
     ///
     /// [query parameters]: https://clickhouse.com/docs/sql-reference/syntax#defining-and-using-query-parameters
     /// [Arrow IPC format]: https://arrow.apache.org/docs/format/Columnar.html#format-ipc
@@ -122,7 +130,14 @@ impl Statement for ClickhouseStatement {
     /// and converted server-side.
     ///
     /// This may be called before or after [`Self::set_sql_query()`]. Binding is performed
-    /// during the call to [`Self::execute()`] or [`Self::execute_update()`]`.
+    /// during the call to [`Self::execute()`] or [`Self::execute_update()`].
+    ///
+    /// # Data Type Support
+    /// Most Arrow scalar types are supported, with some exceptions.
+    /// See [the crate root docs][crate#data-type-support] for remarks and limitations on
+    /// the datatypes supported by this API.
+    ///
+    /// See also `bind_scalar()` in `src/statement.rs` for the actual implementation.
     ///
     /// [Arrow IPC format]: https://arrow.apache.org/docs/format/Columnar.html#format-ipc
     fn bind_stream(
@@ -395,9 +410,11 @@ impl Optionable for ClickhouseStatement {
             // OptionStatement::Incremental => {}
             // OptionStatement::Progress => {}
             // OptionStatement::MaxProgress => {}
-            OptionStatement::Other(s) if s == options::QUERY_ID => {
-                Ok(self.client.get_option("query_id").unwrap_or("").into())
-            }
+            OptionStatement::Other(s) if s == options::QUERY_ID => Ok(self
+                .client
+                .get_option(options::as_setting::QUERY_ID)
+                .unwrap_or("")
+                .into()),
             other => Err(Error::with_message_and_status(
                 format!("unimplemented connection option: {:?}", other.as_ref()),
                 Status::NotImplemented,
@@ -446,10 +463,18 @@ impl ClickhouseStatement {
                 self.client.set_product_info(&value.try_into()?);
             }
             options::SESSION_ID => {
-                self.client.set_option("session_id", value.try_string(key)?);
+                self.client
+                    .set_setting(options::as_setting::SESSION_ID, value.try_string(key)?);
             }
             options::QUERY_ID => {
-                self.client.set_option("query_id", value.try_string(key)?);
+                self.client
+                    .set_setting(options::as_setting::QUERY_ID, value.try_string(key)?);
+            }
+            options::OUTPUT_STRING_AS_STRING => {
+                self.client.set_setting(
+                    options::as_setting::OUTPUT_STRING_AS_STRING,
+                    value.try_string(key)?,
+                );
             }
             other => {
                 return Err(Error::with_message_and_status(
@@ -598,13 +623,15 @@ fn bind_record_batch(mut query: Query, batch: RecordBatch) -> Result<Query, Erro
     let schema = batch.schema_ref();
 
     for (field, column) in schema.fields.iter().zip(batch.columns()) {
-        query = bind_scalar(query, field.name(), column)?;
+        query = bind_scalar(query, field, column)?;
     }
 
     Ok(query)
 }
 
-fn bind_scalar(query: Query, name: &str, array: &dyn Array) -> Result<Query, Error> {
+fn bind_scalar(query: Query, field: &Field, array: &dyn Array) -> Result<Query, Error> {
+    let name = field.name();
+
     if array.is_null(0) {
         // The exact type doesn't matter because it just serializes to a literal `NULL`
         return Ok(query.param(name, Option::<String>::None));
@@ -761,11 +788,48 @@ fn bind_scalar(query: Query, name: &str, array: &dyn Array) -> Result<Query, Err
         // There's also no corresponding type in `clickhouse-rs`
         // DataType::Interval(_) => {}
 
-        // FIXME: `ParamSerializer` in `clickhouse-rs` doesn't support `serialize_bytes()`
-        // DataType::Binary => {},
-        // DataType::FixedSizeBinary(_) => {}
-        // DataType::LargeBinary => {}
-        // DataType::BinaryView => {}
+        // Special recognition for the `arrow.uuid` type to bind as a UUID and not a bytestring.
+        //
+        // This could be `.try_extension_type(arrow_schema::extensions::Uuid)`
+        // but in `arrow-schema = "58.3.0"` it rejects the metadata ClickHouse server returns.
+        DataType::FixedSizeBinary(16) if field.extension_type_name() == Some("arrow.uuid") => {
+            let value = array.as_fixed_size_binary().value(0);
+
+            Ok(query.param(
+                name,
+                Uuid::from_slice(value).map_err(|_| {
+                    // Technically any 16 arbitrary bytes is a valid UUID;
+                    // any unrecognized version is just treated as non-standard.
+                    //
+                    // The only possible error is that the slice is the wrong length,
+                    // which is technically a logic error or bug since we already checked the type,
+                    // but a panic here is potentially problematic since FFI is likely involved.
+                    Error::with_message_and_status(
+                        format!("expected 16 bytes for UUID parameter, got {}", value.len()),
+                        Status::InvalidArguments,
+                    )
+                })?,
+            ))
+        }
+
+        // Wrapping with `serde_bytes::Bytes` is required to serialize as a bytestring
+        // instead of an array of integers.
+        DataType::Binary => Ok(query.param(
+            name,
+            serde_bytes::Bytes::new(array.as_binary::<i32>().value(0)),
+        )),
+        DataType::FixedSizeBinary(_) => Ok(query.param(
+            name,
+            serde_bytes::Bytes::new(array.as_fixed_size_binary().value(0)),
+        )),
+        DataType::LargeBinary => Ok(query.param(
+            name,
+            serde_bytes::Bytes::new(array.as_binary::<i64>().value(0)),
+        )),
+        DataType::BinaryView => Ok(query.param(
+            name,
+            serde_bytes::Bytes::new(array.as_binary_view().value(0)),
+        )),
 
         // This is less annoying than `AsArray::as_string()`
         DataType::Utf8 => Ok(query.param(name, as_string_array(array).value(0))),

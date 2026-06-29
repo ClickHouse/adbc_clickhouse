@@ -138,6 +138,43 @@ pub const SESSION_ID: &str = "clickhouse.client.session_id";
 /// ```
 pub const QUERY_ID: &str = "clickhouse.client.query_id";
 
+/// Sets whether ClickHouse reports all `String` values as Arrow UTF-8 strings (enabled by default).
+///
+/// Set to `"false"` (ADBC convention) or `"0"` (ClickHouse convention) to have ClickHouse output
+/// all `String` types as binary instead.
+///
+/// Maps to the [`output_format_arrow_string_as_string`] setting.
+///
+/// May be set on [`ClickhouseConnection`] or [`ClickhouseStatement`].
+///
+/// **Note**: `FixedString(N)` is always reported as binary because Arrow does not have
+/// a fixed-size UTF-8 string type.
+///
+/// [`output_format_arrow_string_as_string`]: https://clickhouse.com/docs/operations/settings/formats#output_format_arrow_string_as_string
+///
+/// # Motivation
+/// ClickHouse's type system does not differentiate between binary strings and UTF-8 strings.
+/// While the `String` type is _conventionally_ UTF-8, this is not enforced.
+///
+/// For convenience, ClickHouse defaults to reporting all `String` values as Arrow UTF-8 strings
+/// without any validation, which could result in deserialization errors at runtime if a string
+/// is encountered that is not valid UTF-8.
+///
+/// Setting this to `"false"`/`"0"` causes ClickHouse to report all `String` values
+/// as Arrow binary strings instead.
+pub const OUTPUT_STRING_AS_STRING: &str = "clickhouse.client.output_string_as_string";
+
+/// Server-side settings for the public options in the parent module.
+///
+/// Prefer declaring constants over magic strings to avoid typos.
+pub(crate) mod as_setting {
+    pub const SESSION_ID: &str = "session_id";
+
+    pub const QUERY_ID: &str = "query_id";
+
+    pub const OUTPUT_STRING_AS_STRING: &str = "output_format_arrow_string_as_string";
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ProductInfo {
     /// The original string that was passed for lossless read-back.
