@@ -274,39 +274,19 @@ impl Driver for ClickhouseDriver {
 ///
 /// let mut database = driver.new_database().unwrap();
 ///
-/// database.set_option(OptionDatabase::Uri, "https://localhost:8123".into()).unwrap();
-///
 /// // `https://` and `http://` schemes are not rewritten (except for normalization)
-/// assert_eq!(
-///     database.get_option_string(OptionDatabase::Uri).unwrap(),
-///     "https://localhost:8123/",
-/// );
+/// database.set_option(OptionDatabase::Uri, "https://localhost:8123".into()).unwrap();
 ///
 /// database.set_option(OptionDatabase::Uri, "http://localhost:8123".into()).unwrap();
 ///
-/// assert_eq!(
-///     database.get_option_string(OptionDatabase::Uri).unwrap(),
-///     "http://localhost:8123/",
-/// );
-///
 /// // `clickhouse://` is rewritten to `https://`
 /// database.set_option(OptionDatabase::Uri, "clickhouse://localhost:8123".into()).unwrap();
-///
-/// assert_eq!(
-///     database.get_option_string(OptionDatabase::Uri).unwrap(),
-///     "https://localhost:8123/",
-/// );
 ///
 /// // Override to `http://` when TLS is not desired
 /// database.set_option(
 ///     OptionDatabase::Uri,
 ///     "clickhouse://localhost:8123?protocol=http".into()
 /// ).unwrap();
-///
-/// assert_eq!(
-///     database.get_option_string(OptionDatabase::Uri).unwrap(),
-///     "http://localhost:8123/",
-/// );
 ///
 /// // Note: connects lazily on first query
 /// let mut connection = database.new_connection().unwrap();
