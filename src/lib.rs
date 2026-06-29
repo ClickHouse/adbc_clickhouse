@@ -890,6 +890,7 @@ mod tests {
     use crate::{ClickhouseDriver, options};
     use adbc_core::options::OptionDatabase;
     use adbc_core::{Connection, Database, Driver, Optionable};
+    use url::Url;
 
     #[test]
     fn test_set_product_info() {
@@ -961,10 +962,9 @@ mod tests {
                 .set_option(OptionDatabase::Uri, original_url.into())
                 .unwrap();
 
-            let rewritten_url = database.get_option_string(OptionDatabase::Uri).unwrap();
-
             assert_eq!(
-                rewritten_url, expected_url,
+                database.url.as_ref().map(Url::as_str),
+                Some(expected_url),
                 "original URL: {original_url:?}"
             );
         }
