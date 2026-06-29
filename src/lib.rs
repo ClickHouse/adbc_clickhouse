@@ -868,6 +868,7 @@ fn rewrite_url(url: Url) -> Result<Url> {
 #[cfg(test)]
 mod tests {
     use crate::{ClickhouseDriver, options};
+    use adbc_core::error::Status;
     use adbc_core::options::OptionDatabase;
     use adbc_core::{Connection, Database, Driver, Optionable};
     use url::Url;
@@ -948,6 +949,20 @@ mod tests {
                 "original URL: {original_url:?}"
             );
         }
+
+        // Invalid protocol override
+        let mut database = driver.new_database().unwrap();
+
+        assert_eq!(
+            database
+                .set_option(
+                    OptionDatabase::Uri,
+                    "clickhouse://localhost:8123?protocol=ftp".into()
+                )
+                .unwrap_err()
+                .status,
+            Status::InvalidArguments
+        );
     }
 
     #[test]
