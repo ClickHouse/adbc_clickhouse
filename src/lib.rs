@@ -388,6 +388,10 @@ impl Database for ClickhouseDatabase {
     }
 }
 
+/// # Note: Read-back of sensitive options omitted.
+///
+/// Calling `get_option_string()` with `OptionDatabase::Uri`, `Username` or `Password`
+/// will return an error with [`Status::NotFound`] to avoid leaking sensitive user credentials.
 impl Optionable for ClickhouseDatabase {
     type Option = OptionDatabase;
 
