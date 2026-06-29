@@ -422,12 +422,12 @@ impl Optionable for ClickhouseDatabase {
 
     fn get_option_string(&self, key: Self::Option) -> adbc_core::error::Result<String> {
         match key {
-            OptionDatabase::Uri => Ok(self
-                .url
-                .as_ref()
-                .map_or_else(String::new, |url| url.to_string())),
-            OptionDatabase::Username => Ok(self.username.clone().unwrap_or_default()),
-            OptionDatabase::Password => Ok(self.password.clone().unwrap_or_default()),
+            OptionDatabase::Uri | OptionDatabase::Username | OptionDatabase::Password => {
+                Err(Error::with_message_and_status(
+                    "readback of potentially sensitive options has been omitted",
+                    Status::NotFound,
+                ))
+            }
             OptionDatabase::Other(s) => self.get_custom_option(&s),
             other => Err(Error::with_message_and_status(
                 format!("unimplemented database option {:?}", other.as_ref()),
