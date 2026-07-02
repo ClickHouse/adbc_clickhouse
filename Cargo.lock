@@ -23,6 +23,7 @@ dependencies = [
  "serde_bytes",
  "tokio",
  "tracing",
+ "url",
  "uuid",
 ]
 
