@@ -8,10 +8,11 @@ Connects using the [ClickHouse HTTP interface][ch-http].
 
 [ch-http]: https://clickhouse.com/docs/interfaces/http#overview
 
-## Note: Work-in-Progress
-This driver is still under active development and should not be considered ready for production use.
+## Development Status: Usable Work-in-Progress
+This driver is still under active development but is currently considered to be in a "usable" state.
 
-Many methods are stubbed out and return `NotImplemented` errors.
+Note that many auxiliary methods are stubbed out and return `NotImplemented` errors; to see the implementation status
+of these methods, please refer to the [issue tracker](https://github.com/ClickHouse/adbc_clickhouse/issues).
 
 However, the core query flow is supported:
 
