@@ -1,6 +1,6 @@
 [package]
 name = "adbc_clickhouse"
-version = "0.1.0-alpha.1"
+version = "0.1.0"
 edition = "2024"
 description = "Official ClickHouse ADBC driver."
 authors = [
@@ -9,7 +9,6 @@ authors = [
 ]
 # TODO: replace with ADBC client page on docs
 homepage = "https://clickhouse.com/docs/integrations/rust"
-# Note: private
 repository = "https://github.com/clickhouse/adbc_clickhouse"
 license = "MIT OR Apache-2.0"
 
