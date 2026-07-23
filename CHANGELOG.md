@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+* Implemented `Connection::get_option_string()` for `OptionConnection::AutoCommit`
+  (always `"true"`, as ClickHouse has no transactions), `OptionConnection::CurrentCatalog`
+  (always empty, as ClickHouse has no catalog level above the database) and
+  `OptionConnection::CurrentSchema` (the current database). ([#8])
+    * Driver managers read these back before they will use a connection, so erroring on
+      them can make the driver unusable through one.
+    * `get_option_bytes()` defers to `get_option_string()`, and `get_option_int()`/
+      `get_option_double()` report `InvalidArguments`, matching `ClickhouseDatabase`.
+    * Readback of `OptionConnection::Other` is still unimplemented.
+
+[#8]: https://github.com/ClickHouse/adbc_clickhouse/issues/8
+
 ## [0.1.0] - 2026-07-01
 
 First stable release of the driver.

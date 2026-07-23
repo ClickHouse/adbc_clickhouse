@@ -1,5 +1,6 @@
 use adbc_clickhouse::options;
-use adbc_core::options::{OptionDatabase, OptionStatement};
+use adbc_core::error::Status;
+use adbc_core::options::{OptionConnection, OptionDatabase, OptionStatement};
 use adbc_core::{Connection, Database, Driver, Optionable, Statement};
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int32Type;
@@ -278,6 +279,61 @@ fn execute_handles_no_result_set_statements() {
     .unwrap();
 
     assert_eq!(joined, expected);
+}
+
+#[test]
+fn connection_option_getters() {
+    // ADBC driver managers query these before they will use a connection, so
+    // erroring on them can make the driver unusable through one.
+    let db = test_database();
+    let conn = db.new_connection().unwrap();
+
+    // ClickHouse has no transactions; statements always commit as they run.
+    assert_eq!(
+        conn.get_option_string(OptionConnection::AutoCommit)
+            .unwrap(),
+        "true"
+    );
+
+    // ClickHouse has no catalog level above the database, so the catalog is
+    // empty rather than unsupported.
+    assert_eq!(
+        conn.get_option_string(OptionConnection::CurrentCatalog)
+            .unwrap(),
+        ""
+    );
+
+    assert_eq!(
+        conn.get_option_string(OptionConnection::CurrentSchema)
+            .unwrap(),
+        "default"
+    );
+
+    // Options that genuinely have no meaning here still report NotImplemented.
+    for option in [OptionConnection::IsolationLevel, OptionConnection::ReadOnly] {
+        let err = conn.get_option_string(option).unwrap_err();
+        assert_eq!(err.status, Status::NotImplemented);
+    }
+
+    // `get_option_bytes()` defers to `get_option_string()`, as on `ClickhouseDatabase`.
+    assert_eq!(
+        conn.get_option_bytes(OptionConnection::AutoCommit).unwrap(),
+        b"true"
+    );
+
+    // None of the connection options are numeric.
+    assert_eq!(
+        conn.get_option_int(OptionConnection::AutoCommit)
+            .unwrap_err()
+            .status,
+        Status::InvalidArguments
+    );
+    assert_eq!(
+        conn.get_option_double(OptionConnection::AutoCommit)
+            .unwrap_err()
+            .status,
+        Status::InvalidArguments
+    );
 }
 
 #[test]

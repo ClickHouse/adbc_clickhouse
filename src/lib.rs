@@ -663,19 +663,62 @@ impl Optionable for ClickhouseConnection {
     }
 
     fn get_option_string(&self, key: Self::Option) -> adbc_core::error::Result<String> {
-        err_unimplemented!("ClickhouseConnection::get_option_string({key:?})")
+        match key {
+            // ClickHouse has no transactions, so every statement is committed as it
+            // runs. `rollback()` reports this too; reporting it here as well lets
+            // driver managers check for it without provoking an error.
+            // `ADBC_OPTION_VALUE_ENABLED` in the C API.
+            OptionConnection::AutoCommit => Ok("true".into()),
+
+            // ClickHouse has no catalog level above the database. The database maps
+            // onto ADBC's `db_schema` (see `get_table_schema()`), which leaves the
+            // catalog permanently empty rather than unsupported.
+            OptionConnection::CurrentCatalog => Ok(String::new()),
+
+            OptionConnection::CurrentSchema => self
+                .tokio
+                .block_on(async {
+                    self.client
+                        .query("SELECT currentDatabase()")
+                        .fetch_one::<String>()
+                        .await
+                })
+                .map_err(|e| {
+                    Error::with_message_and_status(
+                        format!("could not read the current database: {e}"),
+                        Status::Internal,
+                    )
+                }),
+
+            // `ReadOnly` and `IsolationLevel` have no meaning without transactions,
+            // and `set_option()` does not accept them either.
+            // Readback of custom (`Other`) options is not implemented yet.
+            other => Err(Error::with_message_and_status(
+                format!("unimplemented connection option {:?}", other.as_ref()),
+                Status::NotImplemented,
+            )),
+        }
     }
 
     fn get_option_bytes(&self, key: Self::Option) -> adbc_core::error::Result<Vec<u8>> {
-        err_unimplemented!("ClickhouseConnection::get_option_bytes({key:?})")
+        // There's no options that are specifically binary-only, so... *shrug*
+        self.get_option_string(key).map(String::into_bytes)
     }
 
     fn get_option_int(&self, key: Self::Option) -> adbc_core::error::Result<i64> {
-        err_unimplemented!("ClickhouseConnection::get_option_int({key:?})")
+        // Currently no connection options that can be integers
+        Err(Error::with_message_and_status(
+            format!("option {:?} is not an integer", key.as_ref()),
+            Status::InvalidArguments,
+        ))
     }
 
     fn get_option_double(&self, key: Self::Option) -> adbc_core::error::Result<f64> {
-        err_unimplemented!("ClickhouseConnection::get_option_double({key:?})")
+        // Currently no connection options that can be doubles
+        Err(Error::with_message_and_status(
+            format!("option {:?} is not a double", key.as_ref()),
+            Status::InvalidArguments,
+        ))
     }
 }
 
