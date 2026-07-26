@@ -694,7 +694,7 @@ impl Optionable for ClickhouseConnection {
             // and `set_option()` does not accept them either.
             // Readback of custom (`Other`) options is not implemented yet.
             other => Err(Error::with_message_and_status(
-                format!("unimplemented connection option {:?}", other.as_ref()),
+                format!("unimplemented connection option: {:?}", other.as_ref()),
                 Status::NotImplemented,
             )),
         }
