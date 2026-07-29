@@ -139,7 +139,21 @@ pub mod readme_test {}
 pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[cfg(feature = "ffi")]
-adbc_ffi::export_driver!(AdbcClickhouseInit, ClickhouseDriver);
+adbc_ffi::export_driver!(AdbcDriverClickhouseInit, ClickhouseDriver);
+
+#[cfg(feature = "ffi")]
+#[allow(non_snake_case)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn AdbcClickhouseInit(
+    version: std::os::raw::c_int,
+    driver: *mut std::os::raw::c_void,
+    error: *mut adbc_ffi::FFI_AdbcError,
+) -> adbc_core::error::AdbcStatusCode {
+    // Compatibility alias. AdbcDriverClickhouseInit is the "proper" name
+    // (note the lowercase) but initial versions exported AdbcClickhouseInit
+    // instead.
+    AdbcDriverClickhouseInit(version, driver, error)
+}
 
 pub use statement::ClickhouseStatement;
 
