@@ -61,7 +61,7 @@ fn get_info_all() {
     );
     assert_eq!(
         string_value(values, by_code[&ADBC_INFO_DRIVER_ARROW_VERSION]),
-        "58.3.0"
+        env!("ADBC_DRIVER_ARROW_VERSION")
     );
     assert_eq!(
         i64_value(values, by_code[&ADBC_INFO_DRIVER_ADBC_VERSION]),

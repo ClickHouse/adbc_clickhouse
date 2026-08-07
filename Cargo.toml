@@ -15,6 +15,9 @@ license = "MIT OR Apache-2.0"
 [lib]
 crate-type = ["lib", "cdylib"]
 
+[build-dependencies]
+cargo_metadata = "0.19"
+
 [features]
 ffi = ["adbc_ffi"]
 

@@ -753,8 +753,8 @@ impl ClickhouseConnection {
         }
 
         if info::wants(codes, InfoCode::DriverArrowVersion) {
-            // Keep in sync with the `arrow-*` crate versions in Cargo.toml.
-            builder.add_string(InfoCode::DriverArrowVersion, "58.3.0");
+            // Resolved `arrow-array` version via `cargo metadata` (see build.rs).
+            builder.add_string(InfoCode::DriverArrowVersion, env!("ADBC_DRIVER_ARROW_VERSION"));
         }
 
         if info::wants(codes, InfoCode::DriverAdbcVersion) {
