@@ -10,8 +10,9 @@ use uuid::Uuid;
 fn binary_strings_round_trip() {
     let params_schema = Arc::new(Schema::new(vec![
         Field::new("field_uuid", DataType::FixedSizeBinary(16), false)
-            // ClickHouse Server returns extra metadata over
-            // what's specified by the canonical extension type.
+            // Match the canonical extension metadata ClickHouse returns.
+            // Do not include server-version-specific keys such as
+            // `PARQUET:logical_type`.
             //
             // `.with_extension_type(arrow_schema::extensions::Uuid)`
             // deletes the `ARROW:extension:metadata` key so equality wouldn't work.
@@ -19,7 +20,6 @@ fn binary_strings_round_trip() {
                 [
                     ("ARROW:extension:name".to_string(), "arrow.uuid".to_string()),
                     ("ARROW:extension:metadata".to_string(), "".to_string()),
-                    ("PARQUET:logical_type".to_string(), "UUID".to_string()),
                 ]
                 .into(),
             ),
