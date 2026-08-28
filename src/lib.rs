@@ -261,6 +261,13 @@ impl Driver for ClickhouseDriver {
 /// The `clickhouse://` scheme is rewritten to `https://` by default for security reasons.
 /// To override this, add `?protocol=http` to the end of the URL.
 ///
+/// Any other query parameter in the URL is treated as a [ClickHouse setting]
+/// (e.g. `?mutations_sync=3`), equivalent to setting the
+/// [`options::SETTING_PREFIX`]-prefixed option of the same name at that moment
+/// (last write wins per setting).
+///
+/// [ClickHouse setting]: https://clickhouse.com/docs/operations/settings/settings
+///
 /// The default URL if none is set is `http://localhost:8123`.
 ///
 /// Set the URL of the database to connect to using [`OptionDatabase::Uri`].
@@ -474,6 +481,23 @@ impl ClickhouseDatabase {
                 ));
             }
         };
+
+        // Query parameters become settings; `clickhouse-rs` clears base-URL
+        // query pairs before each request, so anything left here is dead.
+        for (name, value) in url.query_pairs() {
+            // `rewrite_url()` already consumed `protocol` for `clickhouse://` URLs.
+            if name == "protocol" {
+                return Err(Error::with_message_and_status(
+                    "the \"protocol\" URL parameter is only supported with clickhouse:// URLs",
+                    Status::InvalidArguments,
+                ));
+            }
+
+            self.settings.insert(name.into_owned(), value.into_owned());
+        }
+
+        let mut url = url;
+        url.set_query(None);
 
         self.url = Some(url);
 
@@ -1106,14 +1130,15 @@ mod tests {
                 "clickhouse://localhost:8123/predefined_query_handler?protocol=http",
                 "http://localhost:8123/predefined_query_handler",
             ),
+            // Query parameters are folded into the settings map, not kept in the URL
             (
                 "clickhouse://localhost:8123/predefined_query_handler?protocol=http&session_id=asdf1234",
-                "http://localhost:8123/predefined_query_handler?session_id=asdf1234",
+                "http://localhost:8123/predefined_query_handler",
             ),
             // Preserves fragment (not used by HTTP interface but possibly useful for metadata)
             (
                 "clickhouse://localhost:8123/predefined_query_handler?protocol=http&session_id=asdf1234#some-fragment",
-                "http://localhost:8123/predefined_query_handler?session_id=asdf1234#some-fragment",
+                "http://localhost:8123/predefined_query_handler#some-fragment",
             ),
         ];
 
@@ -1142,6 +1167,64 @@ mod tests {
                 )
                 .unwrap_err()
                 .status,
+            Status::InvalidArguments
+        );
+    }
+
+    #[test]
+    fn test_set_uri_settings() {
+        let mut driver = ClickhouseDriver::init();
+
+        let mut db = driver.new_database().unwrap();
+        db.set_option(
+            OptionDatabase::Uri,
+            "http://localhost:8123?mutations_sync=3&alter_sync=2".into(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            db.url.as_ref().map(Url::as_str),
+            Some("http://localhost:8123/")
+        );
+        assert_eq!(
+            db.get_option_string("clickhouse.setting.mutations_sync".into())
+                .unwrap(),
+            "3"
+        );
+        assert_eq!(
+            db.get_option_string("clickhouse.setting.alter_sync".into())
+                .unwrap(),
+            "2"
+        );
+
+        // Last write wins per setting, in either direction
+        db.set_option("clickhouse.setting.mutations_sync".into(), "1".into())
+            .unwrap();
+        assert_eq!(
+            db.get_option_string("clickhouse.setting.mutations_sync".into())
+                .unwrap(),
+            "1"
+        );
+
+        db.set_option(
+            OptionDatabase::Uri,
+            "http://localhost:8123?mutations_sync=0".into(),
+        )
+        .unwrap();
+        assert_eq!(
+            db.get_option_string("clickhouse.setting.mutations_sync".into())
+                .unwrap(),
+            "0"
+        );
+
+        // `protocol` is reserved for clickhouse:// URLs
+        assert_eq!(
+            db.set_option(
+                OptionDatabase::Uri,
+                "http://localhost:8123?protocol=http".into()
+            )
+            .unwrap_err()
+            .status,
             Status::InvalidArguments
         );
     }

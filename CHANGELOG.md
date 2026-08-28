@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+* Added `clickhouse.setting.<setting_name>` passthrough options for arbitrary
+  [ClickHouse settings](https://clickhouse.com/docs/operations/settings/settings)
+  (e.g. `clickhouse.setting.mutations_sync`). Settable on `ClickhouseDatabase`,
+  `ClickhouseConnection` and `ClickhouseStatement`; values propagate to newly created objects
+  lower in the hierarchy and lower levels override; read back with `get_option_string()`. ([#70])
+* Query parameters in the connection URI (other than `protocol`) are now treated as ClickHouse
+  settings (e.g. `http://localhost:8123?mutations_sync=3`). Previously they were silently
+  dropped. ([#70])
+* Added read-back of `clickhouse.client.session_id` via `Connection::get_option_string()`,
+  as was already documented. ([#70])
+
+[#70]: https://github.com/ClickHouse/adbc_clickhouse/issues/70
+
 ## [0.1.0] - 2026-07-01
 
 First stable release of the driver.

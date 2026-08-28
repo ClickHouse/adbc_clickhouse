@@ -25,6 +25,21 @@ fn query_setting(mut statement: impl Statement<Option = OptionStatement>) -> Str
 }
 
 #[test]
+fn query_with_uri_settings() {
+    let mut driver = test_driver();
+
+    let db = driver
+        .new_database_with_opts([(
+            OptionDatabase::Uri,
+            "http://localhost:8123/?mutations_sync=1".into(),
+        )])
+        .unwrap();
+
+    let mut conn = db.new_connection().unwrap();
+    assert_eq!(query_setting(conn.new_statement().unwrap()), "1");
+}
+
+#[test]
 fn query_with_settings() {
     let mut driver = test_driver();
 

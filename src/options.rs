@@ -178,6 +178,9 @@ pub const OUTPUT_STRING_AS_STRING: &str = "clickhouse.client.output_string_as_st
 /// The current value may be read back with [`Optionable::get_option_string()`],
 /// which returns an error with [`Status::NotFound`] if the setting has not been set.
 ///
+/// Settings may also be passed as query parameters in the connection URI;
+/// see [`ClickhouseDatabase`] for details.
+///
 /// Settings covered by a dedicated `clickhouse.client.*` option (e.g. [`SESSION_ID`]) may
 /// also be set through this prefix; both forms write the same client state, last write wins.
 ///
