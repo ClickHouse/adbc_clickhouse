@@ -410,11 +410,7 @@ impl Optionable for ClickhouseStatement {
             // OptionStatement::Incremental => {}
             // OptionStatement::Progress => {}
             // OptionStatement::MaxProgress => {}
-            OptionStatement::Other(s) if s == options::QUERY_ID => Ok(self
-                .client
-                .get_option(options::as_setting::QUERY_ID)
-                .unwrap_or("")
-                .into()),
+            OptionStatement::Other(s) => self.get_custom_option(&s),
             other => Err(Error::with_message_and_status(
                 format!("unimplemented connection option: {:?}", other.as_ref()),
                 Status::NotImplemented,
@@ -458,6 +454,11 @@ impl ClickhouseStatement {
     }
 
     fn set_custom_option(&mut self, key: &str, value: OptionValue) -> Result<()> {
+        if let Some(name) = options::setting_name(key) {
+            self.client.set_setting(name, value.try_string(key)?);
+            return Ok(());
+        }
+
         match key {
             options::PRODUCT_INFO => {
                 self.client.set_product_info(&value.try_into()?);
@@ -485,6 +486,28 @@ impl ClickhouseStatement {
         }
 
         Ok(())
+    }
+
+    fn get_custom_option(&self, key: &str) -> Result<String> {
+        if let Some(name) = options::setting_name(key) {
+            return self
+                .client
+                .get_option(name)
+                .map(Into::into)
+                .ok_or_else(|| options::setting_not_set(name));
+        }
+
+        match key {
+            options::QUERY_ID => Ok(self
+                .client
+                .get_option(options::as_setting::QUERY_ID)
+                .unwrap_or("")
+                .into()),
+            other => Err(Error::with_message_and_status(
+                format!("unimplemented connection option: {other:?}"),
+                Status::NotImplemented,
+            )),
+        }
     }
 }
 

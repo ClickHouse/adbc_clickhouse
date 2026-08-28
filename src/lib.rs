@@ -103,7 +103,7 @@ use arrow_array::{RecordBatchIterator, RecordBatchReader, record_batch};
 use arrow_schema::Schema;
 use clickhouse::Client;
 use rand::distr::{Alphanumeric, SampleString};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::runtime::{Handle, Runtime, RuntimeFlavor};
@@ -241,6 +241,7 @@ impl Driver for ClickhouseDriver {
             username: None,
             password: None,
             product_info: self.product_info.clone(),
+            settings: HashMap::new(),
         };
 
         for (key, value) in opts {
@@ -301,6 +302,7 @@ pub struct ClickhouseDatabase {
     username: Option<String>,
     password: Option<String>,
     product_info: ProductInfo,
+    settings: HashMap<String, String>,
 }
 
 impl Database for ClickhouseDatabase {
@@ -345,6 +347,10 @@ impl Database for ClickhouseDatabase {
 
         let mut client = AugmentedClient::new(client);
         client.set_product_info(&self.product_info);
+
+        for (name, value) in &self.settings {
+            client.set_setting(name, value.clone());
+        }
 
         drop(tokio_guard);
 
@@ -475,6 +481,12 @@ impl ClickhouseDatabase {
     }
 
     fn set_custom_option(&mut self, key: &str, value: OptionValue) -> Result<()> {
+        if let Some(name) = options::setting_name(key) {
+            self.settings
+                .insert(name.to_owned(), value.try_string(key)?);
+            return Ok(());
+        }
+
         match key {
             options::PRODUCT_INFO => {
                 self.product_info = value.try_into()?;
@@ -491,6 +503,14 @@ impl ClickhouseDatabase {
     }
 
     fn get_custom_option(&self, key: &str) -> Result<String> {
+        if let Some(name) = options::setting_name(key) {
+            return self
+                .settings
+                .get(name)
+                .cloned()
+                .ok_or_else(|| options::setting_not_set(name));
+        }
+
         match key {
             options::PRODUCT_INFO => Ok(self.product_info.to_string()),
             other => Err(Error::with_message_and_status(
@@ -663,7 +683,12 @@ impl Optionable for ClickhouseConnection {
     }
 
     fn get_option_string(&self, key: Self::Option) -> adbc_core::error::Result<String> {
-        err_unimplemented!("ClickhouseConnection::get_option_string({key:?})")
+        match key {
+            OptionConnection::Other(s) => self.get_custom_option(&s),
+            other => {
+                err_unimplemented!("ClickhouseConnection::get_option_string({other:?})")
+            }
+        }
     }
 
     fn get_option_bytes(&self, key: Self::Option) -> adbc_core::error::Result<Vec<u8>> {
@@ -681,6 +706,11 @@ impl Optionable for ClickhouseConnection {
 
 impl ClickhouseConnection {
     fn set_custom_option(&mut self, key: &str, value: OptionValue) -> Result<()> {
+        if let Some(name) = options::setting_name(key) {
+            self.client.set_setting(name, value.try_string(key)?);
+            return Ok(());
+        }
+
         match key {
             options::PRODUCT_INFO => {
                 self.client.set_product_info(&value.try_into()?);
@@ -704,6 +734,28 @@ impl ClickhouseConnection {
         }
 
         Ok(())
+    }
+
+    fn get_custom_option(&self, key: &str) -> Result<String> {
+        if let Some(name) = options::setting_name(key) {
+            return self
+                .client
+                .get_option(name)
+                .map(Into::into)
+                .ok_or_else(|| options::setting_not_set(name));
+        }
+
+        match key {
+            options::SESSION_ID => Ok(self
+                .client
+                .get_option(options::as_setting::SESSION_ID)
+                .unwrap_or("")
+                .into()),
+            other => Err(Error::with_message_and_status(
+                format!("unknown connection option {other:?}"),
+                Status::InvalidArguments,
+            )),
+        }
     }
 }
 
@@ -869,7 +921,7 @@ fn rewrite_url(url: Url) -> Result<Url> {
 mod tests {
     use crate::{ClickhouseDriver, options};
     use adbc_core::error::Status;
-    use adbc_core::options::OptionDatabase;
+    use adbc_core::options::{OptionDatabase, OptionValue};
     use adbc_core::{Connection, Database, Driver, Optionable};
     use url::Url;
 
@@ -907,6 +959,135 @@ mod tests {
                 "foo/3.0.0 bar/2.34.56-rc.1".into(),
             )
             .unwrap();
+    }
+
+    #[test]
+    fn test_set_setting() {
+        let mut driver = ClickhouseDriver::init();
+
+        let mut db = driver
+            .new_database_with_opts([("clickhouse.setting.mutations_sync".into(), "1".into())])
+            .unwrap();
+
+        assert_eq!(
+            db.get_option_string("clickhouse.setting.mutations_sync".into())
+                .unwrap(),
+            "1"
+        );
+
+        db.set_option("clickhouse.setting.mutations_sync".into(), "2".into())
+            .unwrap();
+
+        assert_eq!(
+            db.get_option_string("clickhouse.setting.mutations_sync".into())
+                .unwrap(),
+            "2"
+        );
+
+        // Database-level settings are inherited by new connections
+        let conn = db.new_connection().unwrap();
+
+        assert_eq!(
+            conn.get_option_string("clickhouse.setting.mutations_sync".into())
+                .unwrap(),
+            "2"
+        );
+
+        // Connection-level options override the database-level value
+        let mut conn = db
+            .new_connection_with_opts([("clickhouse.setting.mutations_sync".into(), "3".into())])
+            .unwrap();
+
+        assert_eq!(
+            conn.get_option_string("clickhouse.setting.mutations_sync".into())
+                .unwrap(),
+            "3"
+        );
+
+        let mut statement = conn.new_statement().unwrap();
+
+        assert_eq!(
+            statement
+                .get_option_string("clickhouse.setting.mutations_sync".into())
+                .unwrap(),
+            "3"
+        );
+
+        statement
+            .set_option("clickhouse.setting.mutations_sync".into(), "0".into())
+            .unwrap();
+
+        assert_eq!(
+            statement
+                .get_option_string("clickhouse.setting.mutations_sync".into())
+                .unwrap(),
+            "0"
+        );
+    }
+
+    #[test]
+    fn test_set_setting_errors() {
+        let mut driver = ClickhouseDriver::init();
+        let mut db = driver.new_database().unwrap();
+
+        // Empty setting name
+        assert_eq!(
+            db.set_option("clickhouse.setting.".into(), "1".into())
+                .unwrap_err()
+                .status,
+            Status::InvalidArguments
+        );
+
+        assert_eq!(
+            db.set_option(
+                "clickhouse.setting.mutations_sync".into(),
+                OptionValue::Int(3)
+            )
+            .unwrap_err()
+            .status,
+            Status::InvalidArguments
+        );
+
+        assert_eq!(
+            db.get_option_string("clickhouse.setting.never_set".into())
+                .unwrap_err()
+                .status,
+            Status::NotFound
+        );
+
+        let mut conn = db.new_connection().unwrap();
+
+        assert_eq!(
+            conn.set_option("clickhouse.setting.".into(), "1".into())
+                .unwrap_err()
+                .status,
+            Status::InvalidArguments
+        );
+
+        assert_eq!(
+            conn.get_option_string("clickhouse.setting.never_set".into())
+                .unwrap_err()
+                .status,
+            Status::NotFound
+        );
+
+        let mut statement = conn.new_statement().unwrap();
+
+        assert_eq!(
+            statement
+                .set_option("clickhouse.setting.".into(), "1".into())
+                .unwrap_err()
+                .status,
+            Status::InvalidArguments
+        );
+
+        assert_eq!(
+            statement
+                .get_option_string("clickhouse.setting.never_set".into())
+                .unwrap_err()
+                .status,
+            Status::NotFound
+        );
     }
 
     #[test]
