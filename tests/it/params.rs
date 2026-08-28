@@ -10,16 +10,12 @@ use uuid::Uuid;
 fn binary_strings_round_trip() {
     let params_schema = Arc::new(Schema::new(vec![
         Field::new("field_uuid", DataType::FixedSizeBinary(16), false)
-            // ClickHouse Server returns extra metadata over
-            // what's specified by the canonical extension type.
-            //
             // `.with_extension_type(arrow_schema::extensions::Uuid)`
             // deletes the `ARROW:extension:metadata` key so equality wouldn't work.
             .with_metadata(
                 [
                     ("ARROW:extension:name".to_string(), "arrow.uuid".to_string()),
                     ("ARROW:extension:metadata".to_string(), "".to_string()),
-                    ("PARQUET:logical_type".to_string(), "UUID".to_string()),
                 ]
                 .into(),
             ),
@@ -78,6 +74,24 @@ fn binary_strings_round_trip() {
     let mut records = statement.execute().unwrap();
 
     let record_batch = records.next().unwrap().unwrap();
+
+    // Some server versions add `PARQUET:logical_type` metadata to UUID columns;
+    // drop it so the comparison doesn't depend on the server version.
+    let normalized_schema = Schema::new_with_metadata(
+        record_batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| {
+                let mut metadata = field.metadata().clone();
+                metadata.remove("PARQUET:logical_type");
+                field.as_ref().clone().with_metadata(metadata)
+            })
+            .collect::<Vec<_>>(),
+        record_batch.schema().metadata().clone(),
+    );
+    let record_batch =
+        RecordBatch::try_new(normalized_schema.into(), record_batch.columns().to_vec()).unwrap();
 
     assert_eq!(params, record_batch);
 }
