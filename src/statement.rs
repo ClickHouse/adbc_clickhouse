@@ -289,6 +289,10 @@ impl Statement for ClickhouseStatement {
 
     /// Set the SQL for this [`Statement`].
     ///
+    /// The SQL is sent to the server verbatim: a literal `?` is **not** treated as a bind
+    /// placeholder. To parameterize a query, reference [query parameters] as `{name: Type}`
+    /// in the SQL and supply the values via [`Self::bind()`].
+    ///
     /// For normal queries, e.g. `SELECT`, the `FORMAT` clause may be omitted.
     /// Use of any explicit format other than `ArrowStream` may result in an execution error.
     ///
@@ -298,6 +302,8 @@ impl Statement for ClickhouseStatement {
     /// e.g. setting [`OptionStatement::TargetTable`], which overrides the set SQL query.
     ///
     /// Overwrites any previously set bulk ingest options, e.g. [`OptionStatement::TargetTable`].
+    ///
+    /// [query parameters]: https://clickhouse.com/docs/sql-reference/syntax#defining-and-using-query-parameters
     fn set_sql_query(&mut self, query: impl AsRef<str>) -> adbc_core::error::Result<()> {
         self.mode = StatementMode::SqlQuery(query.as_ref().to_string());
         Ok(())
@@ -949,7 +955,9 @@ fn fetch_blocking(
     // but that results in a larger generated future type
     let _guard = tokio.enter();
 
-    let mut query = client.query(sql);
+    // Raw so a literal `?` is not treated as a bind placeholder;
+    // parameters are bound server-side via `Query::param()`.
+    let mut query = client.query_raw(sql);
     query = bind_query(query, bind)?;
 
     let cursor = query.fetch_arrow().map_err(|e| {
@@ -972,7 +980,7 @@ fn execute_blocking(
     // but that results in a larger generated future type
     let _guard = tokio.enter();
 
-    let mut query = client.query(sql).with_setting("wait_end_of_query", "1");
+    let mut query = client.query_raw(sql).with_setting("wait_end_of_query", "1");
     query = bind_query(query, bind)?;
 
     tokio.block_on(query.execute()).map_err(|e| {

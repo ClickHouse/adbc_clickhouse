@@ -261,7 +261,8 @@ impl Driver for ClickhouseDriver {
 /// The `clickhouse://` scheme is rewritten to `https://` by default for security reasons.
 /// To override this, add `?protocol=http` to the end of the URL.
 ///
-/// Any other query parameter in the URL is treated as a [ClickHouse setting]
+/// Any other query parameter in the URL, except `database` (see [Default Database](#default-database)
+/// below), is treated as a [ClickHouse setting]
 /// (e.g. `?mutations_sync=3`), equivalent to setting the
 /// [`options::SETTING_PREFIX`]-prefixed option of the same name at that moment
 /// (last write wins per setting).
@@ -271,6 +272,47 @@ impl Driver for ClickhouseDriver {
 /// The default URL if none is set is `http://localhost:8123`.
 ///
 /// Set the URL of the database to connect to using [`OptionDatabase::Uri`].
+///
+/// ## Default Database
+/// Add `?database=<name>` to the URL to set the default database for all connections
+/// created from this `Database` (any scheme). Unqualified table names in queries will resolve
+/// to this database instead of the default database configured for the user (usually `default`).
+///
+/// The database name is passed with every request made through the [ClickHouse HTTP interface],
+/// so it is unaffected by session expiry or load balancing, unlike a `USE <name>` statement.
+///
+/// The default database may be overridden per connection with [`OptionConnection::CurrentSchema`],
+/// and read back with [`Optionable::get_option_string()`] on the connection.
+/// (In ADBC terms, a ClickHouse database maps to a *schema*; ClickHouse has no catalog level.)
+///
+/// ```
+/// use adbc_clickhouse::ClickhouseDriver;
+/// use adbc_core::{Driver, Database, Optionable};
+/// use adbc_core::options::{OptionConnection, OptionDatabase};
+///
+/// let mut driver = ClickhouseDriver::init();
+///
+/// let mut database = driver.new_database_with_opts([
+///     (OptionDatabase::Uri, "http://localhost:8123?database=my_db".into()),
+/// ]).unwrap();
+///
+/// // All connections default to `my_db`...
+/// let connection = database.new_connection().unwrap();
+///
+/// // ...but it may be overridden per connection.
+/// let other_connection = database.new_connection_with_opts([
+///     (OptionConnection::CurrentSchema, "other_db".into()),
+/// ]).unwrap();
+///
+/// assert_eq!(
+///     connection.get_option_string(OptionConnection::CurrentSchema).unwrap(),
+///     "my_db"
+/// );
+/// assert_eq!(
+///     other_connection.get_option_string(OptionConnection::CurrentSchema).unwrap(),
+///     "other_db"
+/// );
+/// ```
 ///
 /// ## Example
 /// ```
@@ -484,6 +526,10 @@ impl ClickhouseDatabase {
 
         // Query parameters become settings; `clickhouse-rs` clears base-URL
         // query pairs before each request, so anything left here is dead.
+        // `database` is the exception: it stays in the URL so `Client::with_url()`
+        // recognizes it as the default database.
+        let mut database = None;
+
         for (name, value) in url.query_pairs() {
             // `rewrite_url()` already consumed `protocol` for `clickhouse://` URLs.
             if name == "protocol" {
@@ -493,11 +539,29 @@ impl ClickhouseDatabase {
                 ));
             }
 
+            if name == "database" {
+                // `Client::with_url()` silently ignores an empty `database` parameter;
+                // give immediate feedback instead.
+                if value.is_empty() {
+                    return Err(Error::with_message_and_status(
+                        "URL parameter \"database\" cannot be empty",
+                        Status::InvalidArguments,
+                    ));
+                }
+
+                database = Some(value.into_owned());
+                continue;
+            }
+
             self.settings.insert(name.into_owned(), value.into_owned());
         }
 
         let mut url = url;
         url.set_query(None);
+
+        if let Some(database) = &database {
+            url.query_pairs_mut().append_pair("database", database);
+        }
 
         self.url = Some(url);
 
@@ -687,10 +751,30 @@ impl Optionable for ClickhouseConnection {
         value: OptionValue,
     ) -> adbc_core::error::Result<()> {
         match key {
+            // An ADBC *schema* maps to a ClickHouse database
+            OptionConnection::CurrentSchema => {
+                let database = value.try_string(key.as_ref())?;
+
+                if database.is_empty() {
+                    return Err(Error::with_message_and_status(
+                        format!("option {:?} cannot be empty", key.as_ref()),
+                        Status::InvalidArguments,
+                    ));
+                }
+
+                self.client.set_database(&database);
+            }
+            OptionConnection::CurrentCatalog => {
+                return Err(Error::with_message_and_status(
+                    format!(
+                        "error setting option {:?} = {value:?}: ClickHouse does not have catalogs",
+                        key.as_ref()
+                    ),
+                    Status::InvalidArguments,
+                ));
+            }
             // OptionConnection::AutoCommit => {}
             // OptionConnection::ReadOnly => {}
-            // OptionConnection::CurrentCatalog => {}
-            // OptionConnection::CurrentSchema => {}
             // OptionConnection::IsolationLevel => {}
             OptionConnection::Other(s) => {
                 self.set_custom_option(&s, value)?;
@@ -708,10 +792,17 @@ impl Optionable for ClickhouseConnection {
 
     fn get_option_string(&self, key: Self::Option) -> adbc_core::error::Result<String> {
         match key {
-            OptionConnection::Other(s) => self.get_custom_option(&s),
-            other => {
-                err_unimplemented!("ClickhouseConnection::get_option_string({other:?})")
+            OptionConnection::CurrentSchema => {
+                self.client.database().map(String::from).ok_or_else(|| {
+                    Error::with_message_and_status(
+                        "no default database is configured; \
+                         the server chooses the default database for the user (usually \"default\")",
+                        Status::NotFound,
+                    )
+                })
             }
+            OptionConnection::Other(s) => self.get_custom_option(&s),
+            other => err_unimplemented!("ClickhouseConnection::get_option_string({other:?})"),
         }
     }
 
@@ -818,6 +909,20 @@ impl AugmentedClient {
         }
 
         Arc::make_mut(&mut self.original_client).set_setting(key, value);
+    }
+
+    fn set_database(&mut self, database: &str) {
+        // `Client::with_database()` takes `self` by value
+        fn apply(client: &mut Arc<Client>, database: &str) {
+            let client = Arc::make_mut(client);
+            *client = Client::clone(client).with_database(database);
+        }
+
+        if let Some(modified_client) = &mut self.modified_client {
+            apply(modified_client, database);
+        }
+
+        apply(&mut self.original_client, database);
     }
 
     fn get_option(&self, key: &str) -> Option<&str> {
@@ -945,7 +1050,7 @@ fn rewrite_url(url: Url) -> Result<Url> {
 mod tests {
     use crate::{ClickhouseDriver, options};
     use adbc_core::error::Status;
-    use adbc_core::options::{OptionDatabase, OptionValue};
+    use adbc_core::options::{OptionConnection, OptionDatabase, OptionValue};
     use adbc_core::{Connection, Database, Driver, Optionable};
     use url::Url;
 
@@ -1225,6 +1330,116 @@ mod tests {
             )
             .unwrap_err()
             .status,
+            Status::InvalidArguments
+        );
+    }
+
+    #[test]
+    fn test_set_uri_database() {
+        let mut driver = ClickhouseDriver::init();
+
+        // (original URL, expected database)
+        let urls = [
+            ("http://localhost:8123", None),
+            ("http://localhost:8123?database=my_db", Some("my_db")),
+            ("https://localhost:8123?database=my_db", Some("my_db")),
+            // Survives the `clickhouse://` scheme rewrite
+            ("clickhouse://localhost:8123?database=my_db", Some("my_db")),
+            (
+                "clickhouse://localhost:8123?protocol=http&database=my_db",
+                Some("my_db"),
+            ),
+            // Percent-encoded values are decoded
+            ("http://localhost:8123?database=my%20db", Some("my db")),
+        ];
+
+        for (original_url, expected_db) in urls {
+            let mut database = driver.new_database().unwrap();
+
+            database
+                .set_option(OptionDatabase::Uri, original_url.into())
+                .unwrap();
+
+            let conn = database.new_connection().unwrap();
+
+            assert_eq!(
+                conn.get_option_string(OptionConnection::CurrentSchema).ok(),
+                expected_db.map(String::from),
+                "original URL: {original_url:?}"
+            );
+        }
+
+        // An empty database is rejected
+        let mut database = driver.new_database().unwrap();
+        let err = database
+            .set_option(
+                OptionDatabase::Uri,
+                "http://localhost:8123?database=".into(),
+            )
+            .unwrap_err();
+        assert_eq!(err.status, Status::InvalidArguments);
+    }
+
+    #[test]
+    fn test_connection_current_schema() {
+        let mut driver = ClickhouseDriver::init();
+
+        let db = driver
+            .new_database_with_opts([(
+                OptionDatabase::Uri,
+                "http://localhost:8123?database=from_url".into(),
+            )])
+            .unwrap();
+
+        // Inherited from the URL
+        let conn = db.new_connection().unwrap();
+        assert_eq!(
+            conn.get_option_string(OptionConnection::CurrentSchema)
+                .unwrap(),
+            "from_url"
+        );
+
+        // `CurrentSchema` overrides the URL parameter, whether set at creation or after
+        let mut conn = db
+            .new_connection_with_opts([(OptionConnection::CurrentSchema, "at_creation".into())])
+            .unwrap();
+        assert_eq!(
+            conn.get_option_string(OptionConnection::CurrentSchema)
+                .unwrap(),
+            "at_creation"
+        );
+
+        conn.set_option(OptionConnection::CurrentSchema, "after_creation".into())
+            .unwrap();
+        assert_eq!(
+            conn.get_option_string(OptionConnection::CurrentSchema)
+                .unwrap(),
+            "after_creation"
+        );
+
+        // Unset database reads back as `NotFound`
+        let db = driver.new_database().unwrap();
+        let mut conn = db.new_connection().unwrap();
+        assert_eq!(
+            conn.get_option_string(OptionConnection::CurrentSchema)
+                .unwrap_err()
+                .status,
+            Status::NotFound
+        );
+
+        // An empty database is rejected
+        assert_eq!(
+            conn.set_option(OptionConnection::CurrentSchema, "".into())
+                .unwrap_err()
+                .status,
+            Status::InvalidArguments
+        );
+
+        // ClickHouse does not have catalogs
+        assert_eq!(
+            conn.set_option(OptionConnection::CurrentCatalog, "nope".into())
+                .unwrap_err()
+                .status,
             Status::InvalidArguments
         );
     }
