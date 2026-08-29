@@ -79,5 +79,23 @@ fn binary_strings_round_trip() {
 
     let record_batch = records.next().unwrap().unwrap();
 
+    // Some server versions add `PARQUET:logical_type` metadata to UUID columns;
+    // drop it so the comparison doesn't depend on the server version.
+    let normalized_schema = Schema::new_with_metadata(
+        record_batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| {
+                let mut metadata = field.metadata().clone();
+                metadata.remove("PARQUET:logical_type");
+                field.as_ref().clone().with_metadata(metadata)
+            })
+            .collect::<Vec<_>>(),
+        record_batch.schema().metadata().clone(),
+    );
+    let record_batch =
+        RecordBatch::try_new(normalized_schema.into(), record_batch.columns().to_vec()).unwrap();
+
     assert_eq!(params, record_batch);
 }
