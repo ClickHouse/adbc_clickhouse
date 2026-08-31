@@ -26,8 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       The configured value may be read back with `Connection::get_option_string()`.
     * The database is passed with every HTTP request, so it is unaffected by session expiry
       or per-request load balancing, unlike a `USE <name>` statement.
-* Added read-back of `clickhouse.client.session_id` via `Connection::get_option_string()`,
-  as was already documented. ([#67])
 
 ### Changed
 
