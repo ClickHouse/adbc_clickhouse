@@ -103,7 +103,7 @@ use arrow_array::{RecordBatchIterator, RecordBatchReader, record_batch};
 use arrow_schema::Schema;
 use clickhouse::Client;
 use rand::distr::{Alphanumeric, SampleString};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::runtime::{Handle, Runtime, RuntimeFlavor};
@@ -241,6 +241,7 @@ impl Driver for ClickhouseDriver {
             username: None,
             password: None,
             product_info: self.product_info.clone(),
+            settings: HashMap::new(),
         };
 
         for (key, value) in opts {
@@ -259,6 +260,13 @@ impl Driver for ClickhouseDriver {
 ///
 /// The `clickhouse://` scheme is rewritten to `https://` by default for security reasons.
 /// To override this, add `?protocol=http` to the end of the URL.
+///
+/// Any other query parameter in the URL is treated as a [ClickHouse setting]
+/// (e.g. `?mutations_sync=3`), equivalent to setting the
+/// [`options::SETTING_PREFIX`]-prefixed option of the same name at that moment
+/// (last write wins per setting).
+///
+/// [ClickHouse setting]: https://clickhouse.com/docs/operations/settings/settings
 ///
 /// The default URL if none is set is `http://localhost:8123`.
 ///
@@ -301,6 +309,7 @@ pub struct ClickhouseDatabase {
     username: Option<String>,
     password: Option<String>,
     product_info: ProductInfo,
+    settings: HashMap<String, String>,
 }
 
 impl Database for ClickhouseDatabase {
@@ -345,6 +354,10 @@ impl Database for ClickhouseDatabase {
 
         let mut client = AugmentedClient::new(client);
         client.set_product_info(&self.product_info);
+
+        for (name, value) in &self.settings {
+            client.set_setting(name, value.clone());
+        }
 
         drop(tokio_guard);
 
@@ -469,12 +482,35 @@ impl ClickhouseDatabase {
             }
         };
 
+        // Query parameters become settings; `clickhouse-rs` clears base-URL
+        // query pairs before each request, so anything left here is dead.
+        for (name, value) in url.query_pairs() {
+            // `rewrite_url()` already consumed `protocol` for `clickhouse://` URLs.
+            if name == "protocol" {
+                return Err(Error::with_message_and_status(
+                    "the \"protocol\" URL parameter is only supported with clickhouse:// URLs",
+                    Status::InvalidArguments,
+                ));
+            }
+
+            self.settings.insert(name.into_owned(), value.into_owned());
+        }
+
+        let mut url = url;
+        url.set_query(None);
+
         self.url = Some(url);
 
         Ok(())
     }
 
     fn set_custom_option(&mut self, key: &str, value: OptionValue) -> Result<()> {
+        if let Some(name) = options::setting_name(key) {
+            self.settings
+                .insert(name.to_owned(), value.try_string(key)?);
+            return Ok(());
+        }
+
         match key {
             options::PRODUCT_INFO => {
                 self.product_info = value.try_into()?;
@@ -491,6 +527,14 @@ impl ClickhouseDatabase {
     }
 
     fn get_custom_option(&self, key: &str) -> Result<String> {
+        if let Some(name) = options::setting_name(key) {
+            return self
+                .settings
+                .get(name)
+                .cloned()
+                .ok_or_else(|| options::setting_not_set(name));
+        }
+
         match key {
             options::PRODUCT_INFO => Ok(self.product_info.to_string()),
             other => Err(Error::with_message_and_status(
@@ -663,7 +707,12 @@ impl Optionable for ClickhouseConnection {
     }
 
     fn get_option_string(&self, key: Self::Option) -> adbc_core::error::Result<String> {
-        err_unimplemented!("ClickhouseConnection::get_option_string({key:?})")
+        match key {
+            OptionConnection::Other(s) => self.get_custom_option(&s),
+            other => {
+                err_unimplemented!("ClickhouseConnection::get_option_string({other:?})")
+            }
+        }
     }
 
     fn get_option_bytes(&self, key: Self::Option) -> adbc_core::error::Result<Vec<u8>> {
@@ -681,6 +730,11 @@ impl Optionable for ClickhouseConnection {
 
 impl ClickhouseConnection {
     fn set_custom_option(&mut self, key: &str, value: OptionValue) -> Result<()> {
+        if let Some(name) = options::setting_name(key) {
+            self.client.set_setting(name, value.try_string(key)?);
+            return Ok(());
+        }
+
         match key {
             options::PRODUCT_INFO => {
                 self.client.set_product_info(&value.try_into()?);
@@ -704,6 +758,28 @@ impl ClickhouseConnection {
         }
 
         Ok(())
+    }
+
+    fn get_custom_option(&self, key: &str) -> Result<String> {
+        if let Some(name) = options::setting_name(key) {
+            return self
+                .client
+                .get_option(name)
+                .map(Into::into)
+                .ok_or_else(|| options::setting_not_set(name));
+        }
+
+        match key {
+            options::SESSION_ID => Ok(self
+                .client
+                .get_option(options::as_setting::SESSION_ID)
+                .unwrap_or("")
+                .into()),
+            other => Err(Error::with_message_and_status(
+                format!("unknown connection option {other:?}"),
+                Status::InvalidArguments,
+            )),
+        }
     }
 }
 
@@ -869,7 +945,7 @@ fn rewrite_url(url: Url) -> Result<Url> {
 mod tests {
     use crate::{ClickhouseDriver, options};
     use adbc_core::error::Status;
-    use adbc_core::options::OptionDatabase;
+    use adbc_core::options::{OptionDatabase, OptionValue};
     use adbc_core::{Connection, Database, Driver, Optionable};
     use url::Url;
 
@@ -910,6 +986,135 @@ mod tests {
     }
 
     #[test]
+    fn test_set_setting() {
+        let mut driver = ClickhouseDriver::init();
+
+        let mut db = driver
+            .new_database_with_opts([("clickhouse.setting.mutations_sync".into(), "1".into())])
+            .unwrap();
+
+        assert_eq!(
+            db.get_option_string("clickhouse.setting.mutations_sync".into())
+                .unwrap(),
+            "1"
+        );
+
+        db.set_option("clickhouse.setting.mutations_sync".into(), "2".into())
+            .unwrap();
+
+        assert_eq!(
+            db.get_option_string("clickhouse.setting.mutations_sync".into())
+                .unwrap(),
+            "2"
+        );
+
+        // Database-level settings are inherited by new connections
+        let conn = db.new_connection().unwrap();
+
+        assert_eq!(
+            conn.get_option_string("clickhouse.setting.mutations_sync".into())
+                .unwrap(),
+            "2"
+        );
+
+        // Connection-level options override the database-level value
+        let mut conn = db
+            .new_connection_with_opts([("clickhouse.setting.mutations_sync".into(), "3".into())])
+            .unwrap();
+
+        assert_eq!(
+            conn.get_option_string("clickhouse.setting.mutations_sync".into())
+                .unwrap(),
+            "3"
+        );
+
+        let mut statement = conn.new_statement().unwrap();
+
+        assert_eq!(
+            statement
+                .get_option_string("clickhouse.setting.mutations_sync".into())
+                .unwrap(),
+            "3"
+        );
+
+        statement
+            .set_option("clickhouse.setting.mutations_sync".into(), "0".into())
+            .unwrap();
+
+        assert_eq!(
+            statement
+                .get_option_string("clickhouse.setting.mutations_sync".into())
+                .unwrap(),
+            "0"
+        );
+    }
+
+    #[test]
+    fn test_set_setting_errors() {
+        let mut driver = ClickhouseDriver::init();
+        let mut db = driver.new_database().unwrap();
+
+        // Empty setting name
+        assert_eq!(
+            db.set_option("clickhouse.setting.".into(), "1".into())
+                .unwrap_err()
+                .status,
+            Status::InvalidArguments
+        );
+
+        assert_eq!(
+            db.set_option(
+                "clickhouse.setting.mutations_sync".into(),
+                OptionValue::Int(3)
+            )
+            .unwrap_err()
+            .status,
+            Status::InvalidArguments
+        );
+
+        assert_eq!(
+            db.get_option_string("clickhouse.setting.never_set".into())
+                .unwrap_err()
+                .status,
+            Status::NotFound
+        );
+
+        let mut conn = db.new_connection().unwrap();
+
+        assert_eq!(
+            conn.set_option("clickhouse.setting.".into(), "1".into())
+                .unwrap_err()
+                .status,
+            Status::InvalidArguments
+        );
+
+        assert_eq!(
+            conn.get_option_string("clickhouse.setting.never_set".into())
+                .unwrap_err()
+                .status,
+            Status::NotFound
+        );
+
+        let mut statement = conn.new_statement().unwrap();
+
+        assert_eq!(
+            statement
+                .set_option("clickhouse.setting.".into(), "1".into())
+                .unwrap_err()
+                .status,
+            Status::InvalidArguments
+        );
+
+        assert_eq!(
+            statement
+                .get_option_string("clickhouse.setting.never_set".into())
+                .unwrap_err()
+                .status,
+            Status::NotFound
+        );
+    }
+
+    #[test]
     fn test_set_uri() {
         let mut driver = ClickhouseDriver::init();
 
@@ -925,14 +1130,15 @@ mod tests {
                 "clickhouse://localhost:8123/predefined_query_handler?protocol=http",
                 "http://localhost:8123/predefined_query_handler",
             ),
+            // Query parameters are folded into the settings map, not kept in the URL
             (
                 "clickhouse://localhost:8123/predefined_query_handler?protocol=http&session_id=asdf1234",
-                "http://localhost:8123/predefined_query_handler?session_id=asdf1234",
+                "http://localhost:8123/predefined_query_handler",
             ),
             // Preserves fragment (not used by HTTP interface but possibly useful for metadata)
             (
                 "clickhouse://localhost:8123/predefined_query_handler?protocol=http&session_id=asdf1234#some-fragment",
-                "http://localhost:8123/predefined_query_handler?session_id=asdf1234#some-fragment",
+                "http://localhost:8123/predefined_query_handler#some-fragment",
             ),
         ];
 
@@ -961,6 +1167,64 @@ mod tests {
                 )
                 .unwrap_err()
                 .status,
+            Status::InvalidArguments
+        );
+    }
+
+    #[test]
+    fn test_set_uri_settings() {
+        let mut driver = ClickhouseDriver::init();
+
+        let mut db = driver.new_database().unwrap();
+        db.set_option(
+            OptionDatabase::Uri,
+            "http://localhost:8123?mutations_sync=3&alter_sync=2".into(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            db.url.as_ref().map(Url::as_str),
+            Some("http://localhost:8123/")
+        );
+        assert_eq!(
+            db.get_option_string("clickhouse.setting.mutations_sync".into())
+                .unwrap(),
+            "3"
+        );
+        assert_eq!(
+            db.get_option_string("clickhouse.setting.alter_sync".into())
+                .unwrap(),
+            "2"
+        );
+
+        // Last write wins per setting, in either direction
+        db.set_option("clickhouse.setting.mutations_sync".into(), "1".into())
+            .unwrap();
+        assert_eq!(
+            db.get_option_string("clickhouse.setting.mutations_sync".into())
+                .unwrap(),
+            "1"
+        );
+
+        db.set_option(
+            OptionDatabase::Uri,
+            "http://localhost:8123?mutations_sync=0".into(),
+        )
+        .unwrap();
+        assert_eq!(
+            db.get_option_string("clickhouse.setting.mutations_sync".into())
+                .unwrap(),
+            "0"
+        );
+
+        // `protocol` is reserved for clickhouse:// URLs
+        assert_eq!(
+            db.set_option(
+                OptionDatabase::Uri,
+                "http://localhost:8123?protocol=http".into()
+            )
+            .unwrap_err()
+            .status,
             Status::InvalidArguments
         );
     }
