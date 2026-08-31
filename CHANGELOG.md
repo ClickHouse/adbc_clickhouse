@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     * Set `OptionConnection::CurrentSchema`/`"adbc.connection.db_schema"` to configure
       (or override) it for a single connection, at creation or later.
       The configured value may be read back with `Connection::get_option_string()`.
+    * Setting `OptionConnection::CurrentSchema` to the empty string clears the default database
+      (e.g. after dropping it); a cleared database reads back as `NotFound`.
     * The database is passed with every HTTP request, so it is unaffected by session expiry
       or per-request load balancing, unlike a `USE <name>` statement.
 

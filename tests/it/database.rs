@@ -139,3 +139,72 @@ fn database_from_url_param() {
         .unwrap();
     cleanup.execute_update().unwrap();
 }
+
+/// Dropping the connection's own default database and recovering by clearing it,
+/// as dbt does when a model drops and recreates its target schema.
+#[test]
+fn clear_default_database() {
+    fn execute(conn: &mut impl Connection, sql: String) -> Result<(), adbc_core::error::Error> {
+        let mut statement = conn.new_statement().unwrap();
+        statement.set_sql_query(sql).unwrap();
+        statement.execute_update().map(|_| ())
+    }
+
+    let mut driver = test_driver();
+
+    let db_name = format!("adbc_test_db_{}", rand::random::<u64>());
+
+    let db = driver
+        .new_database_with_opts([(OptionDatabase::Uri, "http://localhost:8123/".into())])
+        .unwrap();
+
+    let mut setup_conn = db.new_connection().unwrap();
+    execute(&mut setup_conn, format!("CREATE DATABASE {db_name}")).unwrap();
+
+    let mut conn = db
+        .new_connection_with_opts([(OptionConnection::CurrentSchema, db_name.clone().into())])
+        .unwrap();
+    assert_eq!(current_database(conn.new_statement().unwrap()), db_name);
+
+    // The drop succeeds even though its own request still carries `database=<db_name>`...
+    execute(&mut conn, format!("DROP DATABASE {db_name}")).unwrap();
+
+    // ...but afterwards every request on this connection fails with UNKNOWN_DATABASE
+    execute(&mut conn, format!("CREATE DATABASE {db_name}")).unwrap_err();
+
+    // Clearing the default database recovers the connection...
+    conn.set_option(OptionConnection::CurrentSchema, "".into())
+        .unwrap();
+    conn.get_option_string(OptionConnection::CurrentSchema)
+        .unwrap_err();
+    assert_eq!(current_database(conn.new_statement().unwrap()), "default");
+
+    // ...so the database can be recreated on the same connection
+    execute(&mut conn, format!("CREATE DATABASE {db_name}")).unwrap();
+
+    // The database may be set again after clearing
+    conn.set_option(OptionConnection::CurrentSchema, db_name.clone().into())
+        .unwrap();
+    assert_eq!(current_database(conn.new_statement().unwrap()), db_name);
+
+    // Clearing also overrides a database inherited from the URL
+    let url_db = driver
+        .new_database_with_opts([(
+            OptionDatabase::Uri,
+            format!("http://localhost:8123/?database={db_name}").into(),
+        )])
+        .unwrap();
+    let mut url_conn = url_db.new_connection().unwrap();
+    assert_eq!(current_database(url_conn.new_statement().unwrap()), db_name);
+
+    url_conn
+        .set_option(OptionConnection::CurrentSchema, "".into())
+        .unwrap();
+    assert_eq!(
+        current_database(url_conn.new_statement().unwrap()),
+        "default"
+    );
+
+    // Clean up.
+    execute(&mut setup_conn, format!("DROP DATABASE {db_name}")).unwrap();
+}

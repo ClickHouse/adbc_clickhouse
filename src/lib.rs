@@ -285,6 +285,10 @@ impl Driver for ClickhouseDriver {
 /// and read back with [`Optionable::get_option_string()`] on the connection.
 /// (In ADBC terms, a ClickHouse database maps to a *schema*; ClickHouse has no catalog level.)
 ///
+/// Setting [`OptionConnection::CurrentSchema`] to the empty string *clears* the default database
+/// for that connection, falling back to the user's default, e.g. to keep the connection
+/// usable after dropping the database it was configured with.
+///
 /// ```
 /// use adbc_clickhouse::ClickhouseDriver;
 /// use adbc_core::{Driver, Database, Optionable};
@@ -751,18 +755,10 @@ impl Optionable for ClickhouseConnection {
         value: OptionValue,
     ) -> adbc_core::error::Result<()> {
         match key {
-            // An ADBC *schema* maps to a ClickHouse database
+            // An ADBC *schema* maps to a ClickHouse database;
+            // the empty string clears the default database
             OptionConnection::CurrentSchema => {
-                let database = value.try_string(key.as_ref())?;
-
-                if database.is_empty() {
-                    return Err(Error::with_message_and_status(
-                        format!("option {:?} cannot be empty", key.as_ref()),
-                        Status::InvalidArguments,
-                    ));
-                }
-
-                self.client.set_database(&database);
+                self.client.set_database(&value.try_string(key.as_ref())?);
             }
             OptionConnection::CurrentCatalog => {
                 return Err(Error::with_message_and_status(
@@ -792,15 +788,19 @@ impl Optionable for ClickhouseConnection {
 
     fn get_option_string(&self, key: Self::Option) -> adbc_core::error::Result<String> {
         match key {
-            OptionConnection::CurrentSchema => {
-                self.client.database().map(String::from).ok_or_else(|| {
+            OptionConnection::CurrentSchema => self
+                .client
+                .database()
+                // A cleared database reads back as never set
+                .filter(|database| !database.is_empty())
+                .map(String::from)
+                .ok_or_else(|| {
                     Error::with_message_and_status(
                         "no default database is configured; \
                          the server chooses the default database for the user (usually \"default\")",
                         Status::NotFound,
                     )
-                })
-            }
+                }),
             OptionConnection::Other(s) => self.get_custom_option(&s),
             other => err_unimplemented!("ClickhouseConnection::get_option_string({other:?})"),
         }
@@ -911,6 +911,8 @@ impl AugmentedClient {
         Arc::make_mut(&mut self.original_client).set_setting(key, value);
     }
 
+    /// An empty `database` clears the default: `Client` cannot unset it,
+    /// but the server ignores an empty `database` parameter.
     fn set_database(&mut self, database: &str) {
         // `Client::with_database()` takes `self` by value
         fn apply(client: &mut Arc<Client>, database: &str) {
@@ -1417,6 +1419,36 @@ mod tests {
             "after_creation"
         );
 
+        // The empty string clears the database; it reads back as never set
+        conn.set_option(OptionConnection::CurrentSchema, "".into())
+            .unwrap();
+        assert_eq!(
+            conn.get_option_string(OptionConnection::CurrentSchema)
+                .unwrap_err()
+                .status,
+            Status::NotFound
+        );
+
+        // ...and the database may be set again after clearing
+        conn.set_option(OptionConnection::CurrentSchema, "again".into())
+            .unwrap();
+        assert_eq!(
+            conn.get_option_string(OptionConnection::CurrentSchema)
+                .unwrap(),
+            "again"
+        );
+
+        // Clearing also overrides a database inherited from the URL
+        let mut conn = db.new_connection().unwrap();
+        conn.set_option(OptionConnection::CurrentSchema, "".into())
+            .unwrap();
+        assert_eq!(
+            conn.get_option_string(OptionConnection::CurrentSchema)
+                .unwrap_err()
+                .status,
+            Status::NotFound
+        );
+
         // Unset database reads back as `NotFound`
         let db = driver.new_database().unwrap();
         let mut conn = db.new_connection().unwrap();
@@ -1427,12 +1459,14 @@ mod tests {
             Status::NotFound
         );
 
-        // An empty database is rejected
+        // Clearing a never-set database is a no-op
+        conn.set_option(OptionConnection::CurrentSchema, "".into())
+            .unwrap();
         assert_eq!(
-            conn.set_option(OptionConnection::CurrentSchema, "".into())
+            conn.get_option_string(OptionConnection::CurrentSchema)
                 .unwrap_err()
                 .status,
-            Status::InvalidArguments
+            Status::NotFound
         );
 
         // ClickHouse does not have catalogs
