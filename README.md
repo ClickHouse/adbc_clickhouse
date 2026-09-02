@@ -52,6 +52,19 @@ See [the ADBC documentation for your client language](https://arrow.apache.org/a
 Because this driver uses the [ClickHouse HTTP interface][ch-http], the database URI (`ADBC_OPTION_URI` in `adbc.h`)
 should use the `http://` or `https://` schemes.
 
+#### Selecting a Default Database
+
+Add `?database=<name>` to the URI to set the default database for all connections,
+e.g. `http://localhost:8123?database=my_db`. Unqualified table names in queries will then resolve
+to that database instead of the user's default (usually `default`).
+
+The database may also be set (or overridden) per connection with the standard ADBC option
+`ADBC_CONNECTION_OPTION_CURRENT_DB_SCHEMA` (`"adbc.connection.db_schema"`;
+`OptionConnection::CurrentSchema` in Rust), and read back through the same option.
+
+The configured database is passed with every HTTP request, so it is unaffected by session expiry
+or per-request load balancing, unlike a `USE <name>` statement.
+
 ### Rust API
 
 The driver can be directly used as a Rust crate with or without the `ffi` feature (see [Building from Source](#building-from-source) below for prerequisites):

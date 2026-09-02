@@ -11,6 +11,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Implemented `Connection::get_info()` for driver/vendor metadata ([#9]).
 
 [#9]: https://github.com/ClickHouse/adbc_clickhouse/issues/9
+* Added `clickhouse.setting.<setting_name>` passthrough options for arbitrary
+  [ClickHouse settings](https://clickhouse.com/docs/operations/settings/settings)
+  (e.g. `clickhouse.setting.mutations_sync`). Settable on `ClickhouseDatabase`,
+  `ClickhouseConnection` and `ClickhouseStatement`; values propagate to newly created objects
+  lower in the hierarchy and lower levels override; read back with `get_option_string()`. ([#70])
+* Query parameters in the connection URI (other than `protocol` and `database`) are now treated
+  as ClickHouse settings (e.g. `http://localhost:8123?mutations_sync=3`). Previously they were
+  silently dropped. ([#70])
+* Added read-back of `clickhouse.client.session_id` via `Connection::get_option_string()`,
+  as was already documented. ([#70])
+* Added support for configuring the default database of a connection. ([#67])
+    * Set the `database` query parameter in the URL, e.g. `clickhouse://localhost:8123?database=mydb`,
+      to apply it to all connections created from a `Database`.
+    * Set `OptionConnection::CurrentSchema`/`"adbc.connection.db_schema"` to configure
+      (or override) it for a single connection, at creation or later.
+      The configured value may be read back with `Connection::get_option_string()`.
+    * Setting `OptionConnection::CurrentSchema` to the empty string clears the default database
+      (e.g. after dropping it); a cleared database reads back as `NotFound`.
+    * The database is passed with every HTTP request, so it is unaffected by session expiry
+      or per-request load balancing, unlike a `USE <name>` statement.
+
+### Changed
+
+* SQL queries are now sent to the server verbatim: a literal `?` is no longer treated as a
+  client-side bind placeholder (and `??` is no longer unescaped). Use server-side
+  query parameters (`{name: Type}`) with `Statement::bind()` instead, which was already
+  the only supported binding mechanism. ([#53])
+* Updated `clickhouse` to `0.15.2`.
+
+[#53]: https://github.com/ClickHouse/adbc_clickhouse/issues/53
+[#67]: https://github.com/ClickHouse/adbc_clickhouse/issues/67
+[#70]: https://github.com/ClickHouse/adbc_clickhouse/issues/70
 
 ## [0.1.0] - 2026-07-01
 

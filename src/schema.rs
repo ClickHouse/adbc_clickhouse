@@ -90,12 +90,16 @@ impl Settings {
             pushed = true;
         }
 
-        client.query(&sql).fetch_one::<Self>().await.map_err(|e| {
-            Error::with_message_and_status(
-                format!("error fetching Arrow format settings: {e}"),
-                Status::Internal,
-            )
-        })
+        client
+            .query_raw(&sql)
+            .fetch_one::<Self>()
+            .await
+            .map_err(|e| {
+                Error::with_message_and_status(
+                    format!("error fetching Arrow format settings: {e}"),
+                    Status::Internal,
+                )
+            })
     }
 }
 
@@ -106,12 +110,12 @@ pub async fn of_table(
 ) -> adbc_core::error::Result<Schema> {
     let query = if let Some(db) = db {
         client
-            .query("DESCRIBE TABLE {db:Identifier}.{table:Identifier}")
+            .query_raw("DESCRIBE TABLE {db:Identifier}.{table:Identifier}")
             .param("db", db)
             .param("table", table)
     } else {
         client
-            .query("DESCRIBE TABLE {table:Identifier}")
+            .query_raw("DESCRIBE TABLE {table:Identifier}")
             .param("table", table)
     };
 

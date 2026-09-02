@@ -289,6 +289,10 @@ impl Statement for ClickhouseStatement {
 
     /// Set the SQL for this [`Statement`].
     ///
+    /// The SQL is sent to the server verbatim: a literal `?` is **not** treated as a bind
+    /// placeholder. To parameterize a query, reference [query parameters] as `{name: Type}`
+    /// in the SQL and supply the values via [`Self::bind()`].
+    ///
     /// For normal queries, e.g. `SELECT`, the `FORMAT` clause may be omitted.
     /// Use of any explicit format other than `ArrowStream` may result in an execution error.
     ///
@@ -298,6 +302,8 @@ impl Statement for ClickhouseStatement {
     /// e.g. setting [`OptionStatement::TargetTable`], which overrides the set SQL query.
     ///
     /// Overwrites any previously set bulk ingest options, e.g. [`OptionStatement::TargetTable`].
+    ///
+    /// [query parameters]: https://clickhouse.com/docs/sql-reference/syntax#defining-and-using-query-parameters
     fn set_sql_query(&mut self, query: impl AsRef<str>) -> adbc_core::error::Result<()> {
         self.mode = StatementMode::SqlQuery(query.as_ref().to_string());
         Ok(())
@@ -410,11 +416,7 @@ impl Optionable for ClickhouseStatement {
             // OptionStatement::Incremental => {}
             // OptionStatement::Progress => {}
             // OptionStatement::MaxProgress => {}
-            OptionStatement::Other(s) if s == options::QUERY_ID => Ok(self
-                .client
-                .get_option(options::as_setting::QUERY_ID)
-                .unwrap_or("")
-                .into()),
+            OptionStatement::Other(s) => self.get_custom_option(&s),
             other => Err(Error::with_message_and_status(
                 format!("unimplemented connection option: {:?}", other.as_ref()),
                 Status::NotImplemented,
@@ -458,6 +460,11 @@ impl ClickhouseStatement {
     }
 
     fn set_custom_option(&mut self, key: &str, value: OptionValue) -> Result<()> {
+        if let Some(name) = options::setting_name(key) {
+            self.client.set_setting(name, value.try_string(key)?);
+            return Ok(());
+        }
+
         match key {
             options::PRODUCT_INFO => {
                 self.client.set_product_info(&value.try_into()?);
@@ -485,6 +492,28 @@ impl ClickhouseStatement {
         }
 
         Ok(())
+    }
+
+    fn get_custom_option(&self, key: &str) -> Result<String> {
+        if let Some(name) = options::setting_name(key) {
+            return self
+                .client
+                .get_option(name)
+                .map(Into::into)
+                .ok_or_else(|| options::setting_not_set(name));
+        }
+
+        match key {
+            options::QUERY_ID => Ok(self
+                .client
+                .get_option(options::as_setting::QUERY_ID)
+                .unwrap_or("")
+                .into()),
+            other => Err(Error::with_message_and_status(
+                format!("unimplemented connection option: {other:?}"),
+                Status::NotImplemented,
+            )),
+        }
     }
 }
 
@@ -926,7 +955,9 @@ fn fetch_blocking(
     // but that results in a larger generated future type
     let _guard = tokio.enter();
 
-    let mut query = client.query(sql);
+    // Raw so a literal `?` is not treated as a bind placeholder;
+    // parameters are bound server-side via `Query::param()`.
+    let mut query = client.query_raw(sql);
     query = bind_query(query, bind)?;
 
     let cursor = query.fetch_arrow().map_err(|e| {
@@ -949,7 +980,7 @@ fn execute_blocking(
     // but that results in a larger generated future type
     let _guard = tokio.enter();
 
-    let mut query = client.query(sql).with_setting("wait_end_of_query", "1");
+    let mut query = client.query_raw(sql).with_setting("wait_end_of_query", "1");
     query = bind_query(query, bind)?;
 
     tokio.block_on(query.execute()).map_err(|e| {

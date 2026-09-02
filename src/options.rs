@@ -164,6 +164,62 @@ pub const QUERY_ID: &str = "clickhouse.client.query_id";
 /// as Arrow binary strings instead.
 pub const OUTPUT_STRING_AS_STRING: &str = "clickhouse.client.output_string_as_string";
 
+/// Prefix for passing arbitrary [ClickHouse settings] through as driver options.
+///
+/// An option key of the form `clickhouse.setting.<setting_name>` maps directly to the
+/// ClickHouse setting `<setting_name>`, which is sent as a URL query parameter on every
+/// call to the [ClickHouse HTTP interface]. Values must be strings, using the same textual
+/// representation as a [`SET` statement][set] (e.g. `"1"`, `"3"`, `"auto"`).
+///
+/// May be set on [`ClickhouseDatabase`], [`ClickhouseConnection`] or [`ClickhouseStatement`];
+/// like [`PRODUCT_INFO`], the value propagates to newly created objects lower in the
+/// hierarchy, and lower levels may override it.
+///
+/// The current value may be read back with [`Optionable::get_option_string()`],
+/// which returns an error with [`Status::NotFound`] if the setting has not been set.
+///
+/// Settings may also be passed as query parameters in the connection URI;
+/// see [`ClickhouseDatabase`] for details.
+///
+/// Settings covered by a dedicated `clickhouse.client.*` option (e.g. [`SESSION_ID`]) may
+/// also be set through this prefix; both forms write the same client state, last write wins.
+///
+/// [ClickHouse settings]: https://clickhouse.com/docs/operations/settings/settings
+/// [ClickHouse HTTP interface]: https://clickhouse.com/docs/interfaces/http
+/// [set]: https://clickhouse.com/docs/sql-reference/statements/set
+///
+/// # Example
+/// ```rust
+/// use adbc_clickhouse::ClickhouseDriver;
+///
+/// use adbc_core::{Driver, Database, Optionable};
+///
+/// let mut driver = ClickhouseDriver::init();
+///
+/// // Set a ClickHouse setting for all connections subsequently created with this `Database`.
+/// let db = driver
+///     .new_database_with_opts([("clickhouse.setting.mutations_sync".into(), "1".into())])
+///     .unwrap();
+///
+/// let conn = db.new_connection().unwrap();
+///
+/// assert_eq!(
+///     conn.get_option_string("clickhouse.setting.mutations_sync".into())
+///         .unwrap(),
+///     "1"
+/// );
+/// ```
+pub const SETTING_PREFIX: &str = "clickhouse.setting.";
+
+pub(crate) fn setting_name(key: &str) -> Option<&str> {
+    key.strip_prefix(SETTING_PREFIX)
+        .filter(|name| !name.is_empty())
+}
+
+pub(crate) fn setting_not_set(name: &str) -> Error {
+    Error::with_message_and_status(format!("setting {name:?} is not set"), Status::NotFound)
+}
+
 /// Server-side settings for the public options in the parent module.
 ///
 /// Prefer declaring constants over magic strings to avoid typos.

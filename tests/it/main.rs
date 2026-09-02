@@ -12,8 +12,10 @@ use std::sync::Arc;
 
 mod bulk_ingest;
 mod get_info;
+mod database;
 mod get_table_schema;
 mod params;
+mod settings;
 
 // NOTE: tests run with the `current-thread` runtime by default.
 // Set `ADBC_CLICKHOUSE_TEST_MULTI_THREAD=1` to test with the `multi-thread` runtime.
@@ -128,6 +130,51 @@ fn query_with_bind_params() {
         let next = records.next();
         assert!(next.is_none(), "expected None, got {next:?}");
     }
+}
+
+#[test]
+fn query_with_question_marks() {
+    // Regression test for https://github.com/ClickHouse/adbc_clickhouse/issues/53:
+    // a literal `?` in the SQL must be sent to the server verbatim,
+    // not treated as a client-side bind placeholder.
+    let db = test_database();
+    let mut conn = db.new_connection().unwrap();
+
+    let mut statement = conn.new_statement().unwrap();
+    statement
+        .set_sql_query(
+            "SELECT 'foo?' || {suffix:String} AS a, '??' AS b, '?fields' AS c \
+             FROM system.one WHERE 'a?b' LIKE '%?%'",
+        )
+        .unwrap();
+
+    statement
+        .bind(record_batch!(("suffix", Utf8, ["bar"])).unwrap())
+        .unwrap();
+
+    let mut records = statement.execute().unwrap();
+
+    let record = records
+        .next()
+        .expect("expected one RecordBatch, got none")
+        .unwrap();
+
+    let expected = RecordBatch::try_new(
+        Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+            Field::new("c", DataType::Utf8, false),
+        ])
+        .into(),
+        vec![
+            create_array!(Utf8, ["foo?bar"]),
+            create_array!(Utf8, ["??"]),
+            create_array!(Utf8, ["?fields"]),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(record, expected);
 }
 
 #[test]
