@@ -860,6 +860,28 @@ impl ClickhouseConnection {
         Ok(())
     }
 
+    fn get_custom_option(&self, key: &str) -> Result<String> {
+        if let Some(name) = options::setting_name(key) {
+            return self
+                .client
+                .get_option(name)
+                .map(Into::into)
+                .ok_or_else(|| options::setting_not_set(name));
+        }
+
+        match key {
+            options::SESSION_ID => Ok(self
+                .client
+                .get_option(options::as_setting::SESSION_ID)
+                .unwrap_or("")
+                .into()),
+            other => Err(Error::with_message_and_status(
+                format!("unknown connection option {other:?}"),
+                Status::InvalidArguments,
+            )),
+        }
+    }
+
     async fn build_info(
         &self,
         codes: Option<&HashSet<InfoCode>>,
@@ -897,10 +919,8 @@ impl ClickhouseConnection {
             builder.add_string(InfoCode::DriverVersion, env!("CARGO_PKG_VERSION"));
         }
 
-        if info::wants(codes, InfoCode::DriverArrowVersion) {
-            // Resolved `arrow-array` version via `cargo metadata` (see build.rs).
-            builder.add_string(InfoCode::DriverArrowVersion, env!("ADBC_DRIVER_ARROW_VERSION"));
-        }
+        // FIXME: populate `DriverArrowVersion` once we bump `arrow-*` far enough to use
+        // `arrow_array::ARROW_VERSION` (apache/arrow-rs#10957).
 
         if info::wants(codes, InfoCode::DriverAdbcVersion) {
             builder.add_i64(InfoCode::DriverAdbcVersion, ADBC_VERSION_1_1_0 as i64);
@@ -927,27 +947,6 @@ async fn fetch_vendor_version(client: &Client) -> Result<String> {
                 Status::IO,
             )
         })
-    fn get_custom_option(&self, key: &str) -> Result<String> {
-        if let Some(name) = options::setting_name(key) {
-            return self
-                .client
-                .get_option(name)
-                .map(Into::into)
-                .ok_or_else(|| options::setting_not_set(name));
-        }
-
-        match key {
-            options::SESSION_ID => Ok(self
-                .client
-                .get_option(options::as_setting::SESSION_ID)
-                .unwrap_or("")
-                .into()),
-            other => Err(Error::with_message_and_status(
-                format!("unknown connection option {other:?}"),
-                Status::InvalidArguments,
-            )),
-        }
-    }
 }
 
 /// Wrapper for [`Client`] that implements expected semantics for certain settings.

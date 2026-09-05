@@ -59,9 +59,10 @@ fn get_info_all() {
         string_value(values, by_code[&ADBC_INFO_DRIVER_VERSION]),
         env!("CARGO_PKG_VERSION")
     );
-    assert_eq!(
-        string_value(values, by_code[&ADBC_INFO_DRIVER_ARROW_VERSION]),
-        env!("ADBC_DRIVER_ARROW_VERSION")
+    // FIXME: populate once arrow-* exposes a version constant (see get_info in lib.rs).
+    assert!(
+        !by_code.contains_key(&ADBC_INFO_DRIVER_ARROW_VERSION),
+        "DriverArrowVersion should be omitted until arrow-* provides ARROW_VERSION"
     );
     assert_eq!(
         i64_value(values, by_code[&ADBC_INFO_DRIVER_ADBC_VERSION]),
