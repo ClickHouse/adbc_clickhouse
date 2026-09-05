@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* Implemented `Connection::get_info()` for driver/vendor metadata ([#9]).
+
+[#9]: https://github.com/ClickHouse/adbc_clickhouse/issues/9
 * Added `clickhouse.setting.<setting_name>` passthrough options for arbitrary
   [ClickHouse settings](https://clickhouse.com/docs/operations/settings/settings)
   (e.g. `clickhouse.setting.mutations_sync`). ([#70])

@@ -97,12 +97,14 @@
 //! all strings as binary strings instead. This may be set at the connection or statement level.
 use crate::options::{OptionValueExt, ProductInfo};
 use adbc_core::error::{Error, Status};
+use adbc_core::constants::ADBC_VERSION_1_1_0;
 use adbc_core::options::{InfoCode, ObjectDepth, OptionConnection, OptionDatabase, OptionValue};
 use adbc_core::{Connection, Database, Driver, Optionable, schemas};
 use arrow_array::{RecordBatchIterator, RecordBatchReader, record_batch};
 use arrow_schema::Schema;
 use clickhouse::Client;
 use rand::distr::{Alphanumeric, SampleString};
+use std::future::Future;
 use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 use std::sync::Arc;
@@ -124,6 +126,7 @@ macro_rules! err_unimplemented {
     };
 }
 
+mod info;
 pub mod options;
 mod reader;
 mod schema;
@@ -664,11 +667,17 @@ impl Connection for ClickhouseConnection {
         err_unimplemented!("ClickhouseConnection::cancel()")
     }
 
+    /// Return driver and vendor metadata as described by [`InfoCode`].
+    ///
+    /// When `codes` is `None`, all supported info codes are returned. Unsupported codes
+    /// (currently `VendorArrowVersion` and Substrait version bounds) are omitted.
+    ///
+    /// `VendorVersion` is fetched from the server via `SELECT version()`.
     fn get_info(
         &self,
-        _codes: Option<HashSet<InfoCode>>,
+        codes: Option<HashSet<InfoCode>>,
     ) -> adbc_core::error::Result<Box<dyn RecordBatchReader + Send + 'static>> {
-        err_unimplemented!("ClickhouseConnection::get_info()" -> Box<dyn RecordBatchReader + Send + 'static>)
+        self.tokio.block_on(self.build_info(codes.as_ref()))
     }
 
     fn get_objects(
@@ -872,6 +881,72 @@ impl ClickhouseConnection {
             )),
         }
     }
+
+    async fn build_info(
+        &self,
+        codes: Option<&HashSet<InfoCode>>,
+    ) -> Result<Box<dyn RecordBatchReader + Send + 'static>> {
+        let mut builder = info::InfoBuilder::new();
+
+        if info::wants(codes, InfoCode::VendorName) {
+            builder.add_string(InfoCode::VendorName, "ClickHouse");
+        }
+
+        if info::wants(codes, InfoCode::VendorVersion) {
+            let version = fetch_vendor_version(&self.client).await?;
+            builder.add_string(InfoCode::VendorVersion, version);
+        }
+
+        // ClickHouse does not expose a vendor Arrow library version over HTTP.
+        // Omit `VendorArrowVersion` rather than guessing.
+
+        if info::wants(codes, InfoCode::VendorSql) {
+            builder.add_bool(InfoCode::VendorSql, true);
+        }
+
+        if info::wants(codes, InfoCode::VendorSubstrait) {
+            builder.add_bool(InfoCode::VendorSubstrait, false);
+        }
+
+        // Substrait is unsupported. Arrow dense unions cannot carry top-level nulls, so we omit
+        // `VendorSubstrait{Min,Max}Version` rather than returning null `info_value` rows.
+
+        if info::wants(codes, InfoCode::DriverName) {
+            builder.add_string(InfoCode::DriverName, "ADBC ClickHouse Driver");
+        }
+
+        if info::wants(codes, InfoCode::DriverVersion) {
+            builder.add_string(InfoCode::DriverVersion, env!("CARGO_PKG_VERSION"));
+        }
+
+        // FIXME: populate `DriverArrowVersion` once we bump `arrow-*` far enough to use
+        // `arrow_array::ARROW_VERSION` (apache/arrow-rs#10957).
+
+        if info::wants(codes, InfoCode::DriverAdbcVersion) {
+            builder.add_i64(InfoCode::DriverAdbcVersion, ADBC_VERSION_1_1_0 as i64);
+        }
+
+        builder.finish()
+    }
+}
+
+#[derive(clickhouse::Row, serde::Deserialize)]
+struct VendorVersionRow {
+    version: String,
+}
+
+async fn fetch_vendor_version(client: &Client) -> Result<String> {
+    client
+        .query("SELECT version() AS version")
+        .fetch_one::<VendorVersionRow>()
+        .await
+        .map(|row| row.version)
+        .map_err(|e| {
+            Error::with_message_and_status(
+                format!("error fetching ClickHouse version: {e}"),
+                Status::IO,
+            )
+        })
 }
 
 /// Wrapper for [`Client`] that implements expected semantics for certain settings.

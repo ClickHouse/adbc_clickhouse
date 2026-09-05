@@ -11,6 +11,7 @@ use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use std::sync::Arc;
 
 mod bulk_ingest;
+mod get_info;
 mod database;
 mod get_table_schema;
 mod params;
