@@ -240,6 +240,7 @@ impl Driver for ClickhouseDriver {
             url: None,
             username: None,
             password: None,
+            access_token: None,
             product_info: self.product_info.clone(),
             settings: HashMap::new(),
         };
@@ -354,6 +355,7 @@ pub struct ClickhouseDatabase {
     url: Option<Url>,
     username: Option<String>,
     password: Option<String>,
+    access_token: Option<String>,
     product_info: ProductInfo,
     settings: HashMap<String, String>,
 }
@@ -390,12 +392,27 @@ impl Database for ClickhouseDatabase {
             client = client.with_url(url.to_string());
         }
 
-        if let Some(username) = &self.username {
-            client = client.with_user(username);
-        }
+        if let Some(access_token) = &self.access_token {
+            if self.username.is_some() || self.password.is_some() {
+                return Err(Error::with_message_and_status(
+                    format!(
+                        "option {:?} is mutually exclusive with \
+                         `OptionDatabase::Username`/`OptionDatabase::Password`",
+                        options::ACCESS_TOKEN
+                    ),
+                    Status::InvalidArguments,
+                ));
+            }
 
-        if let Some(password) = &self.password {
-            client = client.with_password(password);
+            client = client.with_access_token(access_token);
+        } else {
+            if let Some(username) = &self.username {
+                client = client.with_user(username);
+            }
+
+            if let Some(password) = &self.password {
+                client = client.with_password(password);
+            }
         }
 
         let mut client = AugmentedClient::new(client);
@@ -407,7 +424,11 @@ impl Database for ClickhouseDatabase {
 
         drop(tokio_guard);
 
-        let mut connection = ClickhouseConnection { client, tokio };
+        let mut connection = ClickhouseConnection {
+            client,
+            tokio,
+            uses_credentials: self.username.is_some() || self.password.is_some(),
+        };
 
         for (key, value) in opts {
             connection.set_option(key, value)?;
@@ -583,6 +604,9 @@ impl ClickhouseDatabase {
             options::PRODUCT_INFO => {
                 self.product_info = value.try_into()?;
             }
+            options::ACCESS_TOKEN => {
+                self.access_token = Some(value.try_string(key)?);
+            }
             other => {
                 return Err(Error::with_message_and_status(
                     format!("unknown database option {other:?}"),
@@ -605,6 +629,10 @@ impl ClickhouseDatabase {
 
         match key {
             options::PRODUCT_INFO => Ok(self.product_info.to_string()),
+            options::ACCESS_TOKEN => Err(Error::with_message_and_status(
+                "readback of potentially sensitive options has been omitted",
+                Status::NotFound,
+            )),
             other => Err(Error::with_message_and_status(
                 format!("unknown database option {other:?}"),
                 Status::InvalidArguments,
@@ -648,6 +676,10 @@ impl ClickhouseDatabase {
 pub struct ClickhouseConnection {
     client: AugmentedClient,
     tokio: TokioContext,
+    /// Whether this connection was constructed with a username and/or password, as opposed to
+    /// an access token. `Client::with_access_token()` panics if credentials are already set,
+    /// so this flag lets `set_custom_option()` turn that into an ADBC error instead.
+    uses_credentials: bool,
 }
 
 impl Connection for ClickhouseConnection {
@@ -840,6 +872,20 @@ impl ClickhouseConnection {
                     value.try_string(key)?,
                 );
             }
+            options::ACCESS_TOKEN => {
+                if self.uses_credentials {
+                    return Err(Error::with_message_and_status(
+                        format!(
+                            "option {key:?} is mutually exclusive with \
+                             `OptionDatabase::Username`/`OptionDatabase::Password`, \
+                             which are already set on this connection"
+                        ),
+                        Status::InvalidArguments,
+                    ));
+                }
+
+                self.client.set_access_token(&value.try_string(key)?);
+            }
             other => {
                 return Err(Error::with_message_and_status(
                     format!("unknown connection option {other:?}"),
@@ -866,6 +912,10 @@ impl ClickhouseConnection {
                 .get_option(options::as_setting::SESSION_ID)
                 .unwrap_or("")
                 .into()),
+            options::ACCESS_TOKEN => Err(Error::with_message_and_status(
+                "readback of potentially sensitive options has been omitted",
+                Status::NotFound,
+            )),
             other => Err(Error::with_message_and_status(
                 format!("unknown connection option {other:?}"),
                 Status::InvalidArguments,
@@ -925,6 +975,23 @@ impl AugmentedClient {
         }
 
         apply(&mut self.original_client, database);
+    }
+
+    /// Rotates the access token used to authenticate with the server.
+    ///
+    /// Panics if the underlying `Client` was constructed with a username or password
+    /// (see [`Client::with_access_token()`]); callers must check `uses_credentials` first.
+    fn set_access_token(&mut self, token: &str) {
+        fn apply(client: &mut Arc<Client>, token: &str) {
+            let client = Arc::make_mut(client);
+            *client = Client::clone(client).with_access_token(token);
+        }
+
+        if let Some(modified_client) = &mut self.modified_client {
+            apply(modified_client, token);
+        }
+
+        apply(&mut self.original_client, token);
     }
 
     fn get_option(&self, key: &str) -> Option<&str> {
@@ -1476,6 +1543,104 @@ mod tests {
                 .status,
             Status::InvalidArguments
         );
+    }
+
+    #[test]
+    fn test_access_token_credential_conflict() {
+        let mut driver = ClickhouseDriver::init();
+
+        // Token then username
+        let mut db = driver.new_database().unwrap();
+        db.set_option(options::ACCESS_TOKEN.into(), "my_jwt".into())
+            .unwrap();
+        db.set_option(OptionDatabase::Username, "alice".into())
+            .unwrap();
+        assert_eq!(
+            db.new_connection().err().map(|e| e.status),
+            Some(Status::InvalidArguments)
+        );
+
+        // Username then token (order doesn't matter, since validation happens on connect)
+        let mut db = driver.new_database().unwrap();
+        db.set_option(OptionDatabase::Username, "alice".into())
+            .unwrap();
+        db.set_option(options::ACCESS_TOKEN.into(), "my_jwt".into())
+            .unwrap();
+        assert_eq!(
+            db.new_connection().err().map(|e| e.status),
+            Some(Status::InvalidArguments)
+        );
+
+        // Token plus an empty-string password: `Some("")` still counts as "set"
+        let mut db = driver.new_database().unwrap();
+        db.set_option(options::ACCESS_TOKEN.into(), "my_jwt".into())
+            .unwrap();
+        db.set_option(OptionDatabase::Password, "".into()).unwrap();
+        assert_eq!(
+            db.new_connection().err().map(|e| e.status),
+            Some(Status::InvalidArguments)
+        );
+
+        // Token alone is fine
+        let mut db = driver.new_database().unwrap();
+        db.set_option(options::ACCESS_TOKEN.into(), "my_jwt".into())
+            .unwrap();
+        db.new_connection().unwrap();
+    }
+
+    #[test]
+    fn test_access_token_readback_is_not_found() {
+        let mut driver = ClickhouseDriver::init();
+
+        let mut db = driver.new_database().unwrap();
+        db.set_option(options::ACCESS_TOKEN.into(), "my_jwt".into())
+            .unwrap();
+        assert_eq!(
+            db.get_option_string(options::ACCESS_TOKEN.into())
+                .unwrap_err()
+                .status,
+            Status::NotFound
+        );
+
+        let conn = db
+            .new_connection_with_opts([(options::ACCESS_TOKEN.into(), "my_jwt_2".into())])
+            .unwrap();
+        assert_eq!(
+            conn.get_option_string(options::ACCESS_TOKEN.into())
+                .unwrap_err()
+                .status,
+            Status::NotFound
+        );
+    }
+
+    #[test]
+    fn test_access_token_on_credential_connection_errors() {
+        let mut driver = ClickhouseDriver::init();
+
+        let mut db = driver.new_database().unwrap();
+        db.set_option(OptionDatabase::Username, "alice".into())
+            .unwrap();
+
+        let mut conn = db.new_connection().unwrap();
+        assert_eq!(
+            conn.set_option(options::ACCESS_TOKEN.into(), "my_jwt".into())
+                .unwrap_err()
+                .status,
+            Status::InvalidArguments
+        );
+    }
+
+    #[test]
+    fn test_access_token_rotation() {
+        let mut driver = ClickhouseDriver::init();
+
+        let mut db = driver.new_database().unwrap();
+        db.set_option(options::ACCESS_TOKEN.into(), "my_jwt".into())
+            .unwrap();
+
+        let mut conn = db.new_connection().unwrap();
+        conn.set_option(options::ACCESS_TOKEN.into(), "my_rotated_jwt".into())
+            .unwrap();
     }
 
     #[test]

@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+* Added `clickhouse.client.access_token` option to authenticate with a JWT access token
+  (currently supported only by ClickHouse Cloud), sent as an `Authorization: Bearer <token>`
+  header on every request.
+  * Settable on `ClickhouseDatabase` and `ClickhouseConnection`.
+  * Mutually exclusive with `OptionDatabase::Username`/`OptionDatabase::Password`;
+    setting both returns an error with `Status::InvalidArguments`.
+  * Setting it again on an existing `ClickhouseConnection` rotates the token, which only
+    applies to statements created after the call.
+  * Like `Username`/`Password`, the current value cannot be read back
+    (`get_option_string()` returns `Status::NotFound`).
+
 ## [0.1.1] - 2026-08-31
 
 ### Added

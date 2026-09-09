@@ -13,6 +13,7 @@ use std::sync::Arc;
 mod bulk_ingest;
 mod database;
 mod get_table_schema;
+mod jwt;
 mod params;
 mod settings;
 
