@@ -164,6 +164,35 @@ pub const QUERY_ID: &str = "clickhouse.client.query_id";
 /// as Arrow binary strings instead.
 pub const OUTPUT_STRING_AS_STRING: &str = "clickhouse.client.output_string_as_string";
 
+/// JWT access token to authenticate with [ClickHouse Cloud][ch-cloud-jwt].
+///
+/// The token is sent as an `Authorization: Bearer <token>` header on every request to the
+/// [ClickHouse HTTP interface]. The server derives the username from the token itself, so
+/// no separate username is configured.
+///
+/// **This is only supported by ClickHouse Cloud.** A self-managed/local ClickHouse server
+/// cannot validate a JWT.
+///
+/// This option is mutually exclusive with [`OptionDatabase::Username`]/[`OptionDatabase::Password`]:
+/// setting a token when a username or password is already configured (or vice versa) returns
+/// an error with [`Status::InvalidArguments`] rather than attempting to combine them.
+/// Note that `Some("")` counts as "set" for this purpose.
+///
+/// May be set on [`ClickhouseDatabase`] or [`ClickhouseConnection`]. Not settable on
+/// [`ClickhouseStatement`], since statements share their connection's client and a
+/// per-statement identity would have no effect.
+///
+/// Setting this again on an existing [`ClickhouseConnection`] replaces the token, which is
+/// useful for rotating an expiring JWT. The new token only applies to statements created
+/// after the call, matching how [`OptionConnection::CurrentSchema`](adbc_core::options::OptionConnection::CurrentSchema) behaves.
+///
+/// As with `Username`/`Password`, the current value cannot be read back:
+/// `get_option_string()` returns an error with [`Status::NotFound`].
+///
+/// [ch-cloud-jwt]: https://clickhouse.com/docs/cloud/security/jwt-authentication
+/// [ClickHouse HTTP interface]: https://clickhouse.com/docs/interfaces/http
+pub const ACCESS_TOKEN: &str = "clickhouse.client.access_token";
+
 /// Prefix for passing arbitrary [ClickHouse settings] through as driver options.
 ///
 /// An option key of the form `clickhouse.setting.<setting_name>` maps directly to the

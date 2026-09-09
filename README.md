@@ -17,7 +17,7 @@ of these methods, please refer to the [issue tracker](https://github.com/ClickHo
 However, the core query flow is supported:
 
 * Creating a `Driver` and `Database`
-* Setting URL, username and password on the `Database`
+* Setting URL, username and password, or a JWT access token on the `Database`
 * Creating a `Connection` and `Statement`
 * Setting a query with `Statement::set_sql_query()` and binding parameters with `Statement::bind()`
 * Binding a statement in streaming insert mode with `Statement::bind_stream()`
@@ -128,6 +128,24 @@ let record_batch = arrow::compute::concat_batches(&schema, &record_batches)
     .unwrap();
     
 println!("{record_batch:?}");
+```
+
+Alternatively, [ClickHouse Cloud](https://clickhouse.com/docs/cloud/security/jwt-authentication) supports
+authenticating with a JWT access token instead of a username and password
+(mutually exclusive with `OptionDatabase::Username`/`OptionDatabase::Password`):
+```rust
+use adbc_clickhouse::{ClickhouseDriver, options};
+
+use adbc_core::{Driver, Database};
+use adbc_core::options::OptionDatabase;
+
+let mut driver = ClickhouseDriver::init();
+
+let database = driver.new_database_with_opts([
+    (OptionDatabase::Uri, "https://my-instance.clickhouse.cloud:8443".into()),
+    (options::ACCESS_TOKEN.into(), "<jwt access token>".into()),
+])
+    .unwrap();
 ```
 
 [Cargo]: https://doc.rust-lang.org/cargo/index.html
