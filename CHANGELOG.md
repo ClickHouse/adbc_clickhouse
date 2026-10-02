@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+* Implemented `Connection::get_option_string()` for `OptionConnection::AutoCommit`
+  (always `"true"`, as ClickHouse has no transactions) and `OptionConnection::CurrentCatalog`
+  (always empty, as ClickHouse has no catalog level above the database). ([#8])
+    * Driver managers read these back before they will use a connection, so erroring on
+      them can make the driver unusable through one.
+    * `Connection::get_option_bytes()` defers to `get_option_string()`, and `get_option_int()`/
+      `get_option_double()` report `InvalidArguments`, matching `ClickhouseDatabase`.
+
+[#8]: https://github.com/ClickHouse/adbc_clickhouse/issues/8
+
 ## [0.1.1] - 2026-08-31
 
 ### Added
