@@ -26,6 +26,7 @@ use crate::writer::ArrowStreamWriter;
 use crate::{AugmentedClient, Result, TokioContext, options, random_id};
 use clickhouse::_priv::sql_escape_identifier;
 use clickhouse_ext_arrow::ArrowQueryExt;
+use std::time::Duration;
 
 #[cfg(doc)]
 use adbc_core::options::IngestMode;
@@ -193,6 +194,7 @@ impl Statement for ClickhouseStatement {
             &self.tokio,
             sql,
             self.bind.take(),
+            self.client.query_timeout(),
         )?))
     }
 
@@ -222,7 +224,13 @@ impl Statement for ClickhouseStatement {
             StatementMode::SqlQuery(sql) => {
                 if !is_streaming_insert(sql) {
                     // FIXME: implement proper support for `X-ClickHouse-Summary` header
-                    execute_blocking(&self.client, &self.tokio, sql, self.bind.take())?;
+                    execute_blocking(
+                        &self.client,
+                        &self.tokio,
+                        sql,
+                        self.bind.take(),
+                        self.client.query_timeout(),
+                    )?;
                     return Ok(None);
                 }
 
@@ -248,7 +256,13 @@ impl Statement for ClickhouseStatement {
             }
         };
 
-        execute_streaming_ingest(&self.client, &self.tokio, ingest, stream)
+        execute_streaming_ingest(
+            &self.client,
+            &self.tokio,
+            ingest,
+            stream,
+            self.client.query_timeout(),
+        )
     }
 
     /// # Not Implemented
@@ -483,6 +497,10 @@ impl ClickhouseStatement {
                     value.try_string(key)?,
                 );
             }
+            options::QUERY_TIMEOUT => {
+                self.client
+                    .set_query_timeout(options::parse_timeout(key, &value.try_string(key)?)?);
+            }
             other => {
                 return Err(Error::with_message_and_status(
                     format!("unexpected statement option {other:?}"),
@@ -509,6 +527,13 @@ impl ClickhouseStatement {
                 .get_option(options::as_setting::QUERY_ID)
                 .unwrap_or("")
                 .into()),
+            options::QUERY_TIMEOUT => self
+                .client
+                .query_timeout()
+                .map(|timeout| timeout.as_secs().to_string())
+                .ok_or_else(|| {
+                    Error::with_message_and_status("no query timeout configured", Status::NotFound)
+                }),
             other => Err(Error::with_message_and_status(
                 format!("unimplemented connection option: {other:?}"),
                 Status::NotImplemented,
@@ -906,6 +931,7 @@ fn execute_streaming_ingest(
     tokio: &TokioContext,
     ingest: Ingest,
     mut stream: Box<dyn RecordBatchReader + Send>,
+    query_timeout: Option<Duration>,
 ) -> Result<Option<i64>> {
     // In case any methods we invoke result in a call to Tokio
     // This whole function could just be inside a `tokio.block_on()`
@@ -933,7 +959,16 @@ fn execute_streaming_ingest(
 
     let mut insert = writer.finish()?;
 
-    tokio.block_on(insert.end()).map_err(|e| {
+    let end = insert.end();
+
+    let result = match query_timeout {
+        Some(duration) => tokio
+            .block_on(tokio::time::timeout(duration, end))
+            .map_err(|_| timeout_error())?,
+        None => tokio.block_on(end),
+    };
+
+    result.map_err(|e| {
         Error::with_message_and_status(
             format!("error finishing streaming insert: {e}"),
             Status::Internal,
@@ -949,6 +984,7 @@ fn fetch_blocking(
     tokio: &TokioContext,
     sql: &str,
     bind: Option<BindType>,
+    query_timeout: Option<Duration>,
 ) -> Result<ArrowStreamReader, Error> {
     // `ArrowQueryExt::fetch_arrow()` spawns a task internally.
     // This whole function could just be inside a `tokio.block_on()`
@@ -964,9 +1000,21 @@ fn fetch_blocking(
         Error::with_message_and_status(format!("error executing query: {e}"), Status::Internal)
     })?;
 
-    tokio
-        .block_on(ArrowStreamReader::begin(tokio.clone(), cursor))
-        .map_err(Into::into)
+    // The request future is only driven while polling `ArrowStreamReader::begin()`;
+    // bounding it with `tokio::time::timeout` and dropping it on expiry closes the
+    // in-flight HTTP connection (whether the server then stops the query depends on its
+    // settings, e.g. `cancel_http_readonly_queries_on_client_close`).
+    let begin = ArrowStreamReader::begin(tokio.clone(), cursor);
+
+    let reader = match query_timeout {
+        Some(duration) => tokio
+            .block_on(tokio::time::timeout(duration, begin))
+            .map_err(|_| timeout_error())?,
+        None => tokio.block_on(begin),
+    }
+    .map_err(Into::<Error>::into)?;
+
+    Ok(reader)
 }
 
 fn execute_blocking(
@@ -974,6 +1022,7 @@ fn execute_blocking(
     tokio: &TokioContext,
     sql: &str,
     bind: Option<BindType>,
+    query_timeout: Option<Duration>,
 ) -> Result<Option<i64>, Error> {
     // In case any methods we invoke result in a call to Tokio
     // This whole function could just be inside a `tokio.block_on()`
@@ -983,13 +1032,26 @@ fn execute_blocking(
     let mut query = client.query_raw(sql).with_setting("wait_end_of_query", "1");
     query = bind_query(query, bind)?;
 
-    tokio.block_on(query.execute()).map_err(|e| {
+    let execute = query.execute();
+
+    let result = match query_timeout {
+        Some(duration) => tokio
+            .block_on(tokio::time::timeout(duration, execute))
+            .map_err(|_| timeout_error())?,
+        None => tokio.block_on(execute),
+    };
+
+    result.map_err(|e| {
         Error::with_message_and_status(format!("error executing query: {e}"), Status::Internal)
     })?;
 
     // TODO: parse `X-ClickHouse-Summary` and return rows modified
     // https://github.com/ClickHouse/adbc_clickhouse/issues/15
     Ok(None)
+}
+
+fn timeout_error() -> Error {
+    Error::with_message_and_status("query execution timed out", Status::Timeout)
 }
 
 fn is_streaming_insert(sql: &str) -> bool {

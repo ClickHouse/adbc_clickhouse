@@ -15,6 +15,7 @@ mod database;
 mod get_table_schema;
 mod params;
 mod settings;
+mod timeout;
 
 // NOTE: tests run with the `current-thread` runtime by default.
 // Set `ADBC_CLICKHOUSE_TEST_MULTI_THREAD=1` to test with the `multi-thread` runtime.

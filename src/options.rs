@@ -5,6 +5,7 @@ use adbc_core::options::OptionValue;
 use std::fmt::{Display, Formatter};
 use std::ops::Range;
 use std::str::FromStr;
+use std::time::Duration;
 
 #[cfg(doc)]
 use {
@@ -164,6 +165,54 @@ pub const QUERY_ID: &str = "clickhouse.client.query_id";
 /// as Arrow binary strings instead.
 pub const OUTPUT_STRING_AS_STRING: &str = "clickhouse.client.output_string_as_string";
 
+/// Maximum time, in seconds, that a query may wait to complete before it is abandoned.
+///
+/// Any query executed on a [`ClickhouseConnection`] or [`ClickhouseStatement`] with this
+/// option set is bound end-to-end: if the server has not finished responding within the
+/// configured window, the client stops waiting and drops the in-flight HTTP request, and
+/// execution returns an error with [`Status::Timeout`]. Whether the server also stops the
+/// query depends on server settings such as `cancel_http_readonly_queries_on_client_close`;
+/// pairing this option with the server-side `max_execution_time` setting bounds server work.
+///
+/// This is a client-side safeguard for deployments where an unresponsive or very slow query
+/// would otherwise occupy a worker, connection, or runtime thread indefinitely. It complements,
+/// but does not replace, true cancellation (see [#20]).
+///
+/// May be set on [`ClickhouseConnection`] or [`ClickhouseStatement`].
+/// A timeout set on a `Connection` propagates to every `Statement` created from it,
+/// and a `Statement` may override it.
+///
+/// The value is a string containing a positive integer number of seconds
+/// (e.g. `"30"`). Zero, negative values, and non-numeric values are rejected with
+/// [`Status::InvalidArguments`]. The current value may be read back with
+/// [`Optionable::get_option_string()`].
+///
+/// [#20]: https://github.com/ClickHouse/adbc_clickhouse/issues/20
+///
+/// # Example
+/// ```rust
+/// use adbc_clickhouse::ClickhouseDriver;
+///
+/// use adbc_core::{Driver, Database, Connection, Optionable};
+///
+/// let mut driver = ClickhouseDriver::init();
+///
+/// let db = driver.new_database().unwrap();
+/// let mut conn = db.new_connection().unwrap();
+///
+/// // Abandon any query that has not completed within 60 seconds.
+/// conn.set_option(
+///     adbc_clickhouse::options::QUERY_TIMEOUT.into(),
+///     "60".into(),
+/// ).unwrap();
+///
+/// assert_eq!(
+///     conn.get_option_string(adbc_clickhouse::options::QUERY_TIMEOUT.into()).unwrap(),
+///     "60"
+/// );
+/// ```
+pub const QUERY_TIMEOUT: &str = "clickhouse.client.query_timeout";
+
 /// Prefix for passing arbitrary [ClickHouse settings] through as driver options.
 ///
 /// An option key of the form `clickhouse.setting.<setting_name>` maps directly to the
@@ -218,6 +267,30 @@ pub(crate) fn setting_name(key: &str) -> Option<&str> {
 
 pub(crate) fn setting_not_set(name: &str) -> Error {
     Error::with_message_and_status(format!("setting {name:?} is not set"), Status::NotFound)
+}
+
+/// Parse a client-side query timeout option value as a count of seconds.
+///
+/// Returns an [`Error`] with [`Status::InvalidArguments`] for zero, negative,
+/// and non-numeric values.
+pub(crate) fn parse_timeout(key: &str, value: &str) -> Result<Duration, Error> {
+    let seconds = value.parse::<u64>().map_err(|_| {
+        Error::with_message_and_status(
+            format!(
+                "error setting option {key:?} = {value:?}: expected a positive integer number of seconds"
+            ),
+            Status::InvalidArguments,
+        )
+    })?;
+
+    if seconds == 0 {
+        return Err(Error::with_message_and_status(
+            format!("error setting option {key:?} = {value:?}: must be greater than zero"),
+            Status::InvalidArguments,
+        ));
+    }
+
+    Ok(Duration::from_secs(seconds))
 }
 
 /// Server-side settings for the public options in the parent module.
@@ -429,4 +502,24 @@ fn test_product_info_from_option_value() {
         b"\t my_service/0.1.0 \t my_product/1.0.0 \t".into(),
     ))
     .unwrap_err();
+}
+
+#[test]
+fn test_parse_timeout_valid() {
+    assert_eq!(parse_timeout("key", "1").unwrap(), Duration::from_secs(1));
+    assert_eq!(parse_timeout("key", "30").unwrap(), Duration::from_secs(30));
+    assert_eq!(
+        parse_timeout("key", "3600").unwrap(),
+        Duration::from_secs(3600)
+    );
+}
+
+#[test]
+fn test_parse_timeout_refuses_invalid() {
+    use adbc_core::error::Status;
+
+    for bad in ["0", "-5", "5.5", "abc", "", " "] {
+        let err = parse_timeout("key", bad).unwrap_err();
+        assert_eq!(err.status, Status::InvalidArguments, "value {bad:?}");
+    }
 }

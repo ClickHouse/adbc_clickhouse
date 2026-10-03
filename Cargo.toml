@@ -60,7 +60,7 @@ features = ["serde"]
 
 [dependencies.tokio]
 version = "1.48.0"
-features = ["rt"]
+features = ["rt", "time"]
 
 [dependencies.uuid]
 version = "1.23.3"
