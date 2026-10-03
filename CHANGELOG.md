@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+* Added a client-side query timeout (`clickhouse.client.query_timeout`) that bounds how long a
+  query may wait for the server: when the bound expires the client stops waiting and drops the
+  in-flight HTTP request, and execution returns `Status::Timeout`. Whether the server also stops
+  the query depends on server settings such as `cancel_http_readonly_queries_on_client_close`;
+  pairing with the server-side `max_execution_time` setting bounds server work.
+  ([#20] as a partial answer)
+  * May be set on `ClickhouseConnection` or `ClickhouseStatement`; a `Connection` value inherits
+    to its `Statement`s and may be overridden per `Statement`.
+  * Value is a positive integer number of seconds; zero, negative, and non-numeric values are
+    rejected.
+
+[#20]: https://github.com/ClickHouse/adbc_clickhouse/issues/20
+
 ## [0.1.1] - 2026-08-31
 
 ### Added

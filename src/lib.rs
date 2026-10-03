@@ -106,6 +106,7 @@ use rand::distr::{Alphanumeric, SampleString};
 use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::runtime::{Handle, Runtime, RuntimeFlavor};
 use url::Url;
 
@@ -840,6 +841,10 @@ impl ClickhouseConnection {
                     value.try_string(key)?,
                 );
             }
+            options::QUERY_TIMEOUT => {
+                self.client
+                    .set_query_timeout(options::parse_timeout(key, &value.try_string(key)?)?);
+            }
             other => {
                 return Err(Error::with_message_and_status(
                     format!("unknown connection option {other:?}"),
@@ -866,6 +871,13 @@ impl ClickhouseConnection {
                 .get_option(options::as_setting::SESSION_ID)
                 .unwrap_or("")
                 .into()),
+            options::QUERY_TIMEOUT => self
+                .client
+                .query_timeout()
+                .map(|timeout| timeout.as_secs().to_string())
+                .ok_or_else(|| {
+                    Error::with_message_and_status("no query timeout configured", Status::NotFound)
+                }),
             other => Err(Error::with_message_and_status(
                 format!("unknown connection option {other:?}"),
                 Status::InvalidArguments,
@@ -883,6 +895,8 @@ struct AugmentedClient {
     original_client: Arc<Client>,
     // `Client` implements `Clone`, but it's a deep copy
     modified_client: Option<Arc<Client>>,
+    /// Client-side bound on how long a query may wait for the server.
+    query_timeout: Option<Duration>,
 }
 
 impl AugmentedClient {
@@ -890,7 +904,16 @@ impl AugmentedClient {
         Self {
             original_client: Arc::new(client),
             modified_client: None,
+            query_timeout: None,
         }
+    }
+
+    fn set_query_timeout(&mut self, timeout: Duration) {
+        self.query_timeout = Some(timeout);
+    }
+
+    fn query_timeout(&self) -> Option<Duration> {
+        self.query_timeout
     }
 
     fn set_product_info(&mut self, product_info: &ProductInfo) {
