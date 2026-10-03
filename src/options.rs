@@ -164,6 +164,73 @@ pub const QUERY_ID: &str = "clickhouse.client.query_id";
 /// as Arrow binary strings instead.
 pub const OUTPUT_STRING_AS_STRING: &str = "clickhouse.client.output_string_as_string";
 
+/// PEM root certificates used to verify the ClickHouse server's certificate.
+///
+/// When set, this bundle *replaces* (rather than extends) the built-in root store
+/// (native platform roots or [`webpki-roots`]) that the driver would otherwise use,
+/// so only the given certificate authority is trusted.
+///
+/// This is how any deployment that runs ClickHouse behind its own TLS endpoints
+/// (a private CA, a self-signed certificate, or an internal PKI) can authenticate those
+/// endpoints without relying on the public roots, and it is required when the server
+/// certificate is not signed by a public CA.
+///
+/// The value must be one or more PEM-encoded certificates. Malformed PEM is refused
+/// with an error with [`Status::InvalidArguments`].
+///
+/// May be set on [`ClickhouseDatabase`] or passed to [`Database::new_connection_with_opts()`]
+/// for a specific connection.
+///
+/// Requires the crate to be built with a `rustls-tls-aws-lc` or `rustls-tls-ring` feature.
+///
+/// [`webpki-roots`]: https://github.com/rustls/webpki-roots
+/// [`Status::InvalidArguments`]: adbc_core::error::Status::InvalidArguments
+pub const TLS_ROOT_CERTS: &str = "clickhouse.client.tls_root_certs";
+
+/// PEM certificate chain presented to the server as the client identity for mutual TLS.
+///
+/// The chain is sent when the ClickHouse server requests (or requires) a client certificate.
+/// Deployments that enforce mutual TLS need this to authenticate the client before the server
+/// accepts any query.
+///
+/// Must be paired with [`MTLS_PRIVATE_KEY`]: specifying a certificate chain without a private
+/// key (or a key without a chain) is refused with an error with [`Status::InvalidArguments`]
+/// when the connection is created.
+///
+/// The value must be one or more PEM-encoded certificates (the leaf first, followed by any
+/// intermediate certificates). Malformed PEM is refused with an error with
+/// [`Status::InvalidArguments`].
+///
+/// May be set on [`ClickhouseDatabase`] or passed to [`Database::new_connection_with_opts()`]
+/// for a specific connection.
+///
+/// Requires the crate to be built with a `rustls-tls-aws-lc` or `rustls-tls-ring` feature.
+///
+/// [`Status::InvalidArguments`]: adbc_core::error::Status::InvalidArguments
+pub const MTLS_CERT_CHAIN: &str = "clickhouse.client.mtls_cert_chain";
+
+/// PEM-encoded private key matched to the [`MTLS_CERT_CHAIN`] used as the client identity
+/// for mutual TLS.
+///
+/// This key is never read back through [`Optionable::get_option_string()`]
+/// (its read-back returns an error with [`Status::NotFound`]) to avoid leaking a secret.
+///
+/// Must be paired with [`MTLS_CERT_CHAIN`]: specifying a private key without a certificate
+/// chain (or a chain without a key) is refused with an error with [`Status::InvalidArguments`]
+/// when the connection is created.
+///
+/// The value must be a single PEM-encoded private key. Malformed PEM is refused with an error
+/// with [`Status::InvalidArguments`].
+///
+/// May be set on [`ClickhouseDatabase`] or passed to [`Database::new_connection_with_opts()`]
+/// for a specific connection.
+///
+/// Requires the crate to be built with a `rustls-tls-aws-lc` or `rustls-tls-ring` feature.
+///
+/// [`Status::NotFound`]: adbc_core::error::Status::NotFound
+/// [`Status::InvalidArguments`]: adbc_core::error::Status::InvalidArguments
+pub const MTLS_PRIVATE_KEY: &str = "clickhouse.client.mtls_private_key";
+
 /// Prefix for passing arbitrary [ClickHouse settings] through as driver options.
 ///
 /// An option key of the form `clickhouse.setting.<setting_name>` maps directly to the

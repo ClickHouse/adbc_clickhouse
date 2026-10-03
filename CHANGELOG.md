@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+* New database/connection options for customizing the TLS transport (requires a
+  `rustls-tls-aws-lc` or `rustls-tls-ring` feature, e.g. `rustls-tls`):
+  * `clickhouse.client.tls_root_certs`: a PEM root bundle that *replaces* the built-in roots
+    used to verify the server certificate (e.g. for a private CA / self-signed endpoint).
+  * `clickhouse.client.mtls_cert_chain` + `clickhouse.client.mtls_private_key`: a PEM client
+    certificate chain and matching private key presented to the server for mutual TLS.
+  * Malformed PEM is refused with `InvalidArguments`; a client identity with only one of the
+    two halves (chain or key) is refused when the connection is created.
+  * Options may be set on `ClickhouseDatabase` or passed to `Connection` creation via
+    `new_connection_with_opts()`; the private key is never read back.
+
 ## [0.1.1] - 2026-08-31
 
 ### Added

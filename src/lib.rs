@@ -128,6 +128,7 @@ pub mod options;
 mod reader;
 mod schema;
 mod statement;
+mod tls;
 mod writer;
 
 #[cfg(doctest)]
@@ -242,6 +243,7 @@ impl Driver for ClickhouseDriver {
             password: None,
             product_info: self.product_info.clone(),
             settings: HashMap::new(),
+            tls: tls::TlsOptions::default(),
         };
 
         for (key, value) in opts {
@@ -356,6 +358,7 @@ pub struct ClickhouseDatabase {
     password: Option<String>,
     product_info: ProductInfo,
     settings: HashMap<String, String>,
+    tls: tls::TlsOptions,
 }
 
 impl Database for ClickhouseDatabase {
@@ -369,6 +372,18 @@ impl Database for ClickhouseDatabase {
         &self,
         opts: impl IntoIterator<Item = (OptionConnection, OptionValue)>,
     ) -> adbc_core::error::Result<Self::ConnectionType> {
+        let opts: Vec<(OptionConnection, OptionValue)> = opts.into_iter().collect();
+
+        // The TLS transport is fixed when the HTTP client is built, so assemble it now from the
+        // database-level defaults plus any per-connection overrides.
+        let mut tls = self.tls.clone();
+        for (key, value) in opts.iter().filter_map(|(key, value)| match key {
+            OptionConnection::Other(s) if tls::is_tls_option(s) => Some((s, value)),
+            _ => None,
+        }) {
+            tls.try_set(key, value.clone().try_string(key)?)?;
+        }
+
         let tokio = self
             .tokio
             .clone()
@@ -380,7 +395,29 @@ impl Database for ClickhouseDatabase {
         // It's better to create a new `Client` for each connection because it may error or deadlock
         // if it tries to hop runtimes in the current-thread case.
         // TODO: configure the HTTP client to pool only a single connection (necessary?)
-        let mut client = Client::default()
+        //
+        // When TLS options were set we substitute a `hyper-rustls` transport carrying our custom
+        // `rustls::ClientConfig` for the default one; otherwise fall back to `Client::default()`.
+        let client = {
+            #[cfg(feature = "tls-mtls")]
+            {
+                if tls.is_empty() {
+                    Client::default()
+                } else {
+                    let connector = tls.build_https_connector()?;
+                    let http = hyper_util::client::legacy::Client::builder(
+                        hyper_util::rt::TokioExecutor::new(),
+                    )
+                    .build(connector);
+                    Client::with_http_client(http)
+                }
+            }
+            #[cfg(not(feature = "tls-mtls"))]
+            {
+                Client::default()
+            }
+        };
+        let mut client = client
             // Default `product_info` that should always be included
             // Note: we don't apply `self.product_info` at this level in case it's set
             // to a different value at a lower level; `AugmentedClient` covers that.
@@ -407,9 +444,17 @@ impl Database for ClickhouseDatabase {
 
         drop(tokio_guard);
 
-        let mut connection = ClickhouseConnection { client, tokio };
+        let mut connection = ClickhouseConnection { client, tokio, tls };
 
         for (key, value) in opts {
+            // TLS options were already applied above; the transport is immutable after creation.
+            let tls_option = match &key {
+                OptionConnection::Other(s) => tls::is_tls_option(s),
+                _ => false,
+            };
+            if tls_option {
+                continue;
+            }
             connection.set_option(key, value)?;
         }
 
@@ -583,6 +628,9 @@ impl ClickhouseDatabase {
             options::PRODUCT_INFO => {
                 self.product_info = value.try_into()?;
             }
+            other if tls::is_tls_option(other) => {
+                self.tls.try_set(other, value.try_string(other)?)?;
+            }
             other => {
                 return Err(Error::with_message_and_status(
                     format!("unknown database option {other:?}"),
@@ -605,6 +653,7 @@ impl ClickhouseDatabase {
 
         match key {
             options::PRODUCT_INFO => Ok(self.product_info.to_string()),
+            other if tls::is_tls_option(other) => self.tls.read_back(other),
             other => Err(Error::with_message_and_status(
                 format!("unknown database option {other:?}"),
                 Status::InvalidArguments,
@@ -648,6 +697,7 @@ impl ClickhouseDatabase {
 pub struct ClickhouseConnection {
     client: AugmentedClient,
     tokio: TokioContext,
+    tls: tls::TlsOptions,
 }
 
 impl Connection for ClickhouseConnection {
@@ -826,6 +876,15 @@ impl ClickhouseConnection {
             return Ok(());
         }
 
+        if tls::is_tls_option(key) {
+            return Err(Error::with_message_and_status(
+                "TLS options can only be set on the database or when creating the \
+                 connection (via `Database::new_connection_with_opts`); \
+                 the transport cannot be changed after the connection exists",
+                Status::InvalidArguments,
+            ));
+        }
+
         match key {
             options::PRODUCT_INFO => {
                 self.client.set_product_info(&value.try_into()?);
@@ -866,6 +925,7 @@ impl ClickhouseConnection {
                 .get_option(options::as_setting::SESSION_ID)
                 .unwrap_or("")
                 .into()),
+            other if tls::is_tls_option(other) => self.tls.read_back(other),
             other => Err(Error::with_message_and_status(
                 format!("unknown connection option {other:?}"),
                 Status::InvalidArguments,
