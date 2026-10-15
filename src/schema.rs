@@ -169,11 +169,9 @@ pub async fn of_table(
 pub async fn of_query(
     client: &Client,
     sql: &str
-    ) -> adbc_core::error::Result<Schema> {
-
+) -> adbc_core::error::Result<Schema> {
     // get arrow schema of result set without executing
     // mirrors of_table()
-
 
     // wraps query in DESCRIBE
     let query = client.query_raw(&format!("DESCRIBE ({sql})"));

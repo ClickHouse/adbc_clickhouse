@@ -266,7 +266,7 @@ impl Statement for ClickhouseStatement {
                 // There isn't a sensible thing to return here since bulk inserts aren't generally 
                 // expected to return a result set; we could return an empty reader, but that would
                 // require adding special casing to `ArrowStreamReader`, or dynamic dispatch.
-                // https://arrow.apache.org/adbc/curent/format/specification.html#bulk-data-ingestion
+                // https://arrow.apache.org/adbc/current/format/specification.html#bulk-data-ingestion
                 // as a result, they also don't have a sensible schema that one could return
                 return Err(Error::with_message_and_status(
                     "no schema to return since bulk ingest may only be used with `Statement::execute_update()`",
@@ -277,15 +277,12 @@ impl Statement for ClickhouseStatement {
                 if is_streaming_insert(sql) {
                     // Same as above
                     return Err(Error::with_message_and_status(
-                        "no schema to reutrn since bulk ingest may only be used with `Statement::execute_update()`",
+                        "no schema to return since bulk ingest may only be used with `Statement::execute_update()`",
                         Status::InvalidState,
                     ));
                 }
-
                 sql
-
             }
-
         };
         // copying return structure of get_table_schema()
         self.tokio.block_on(schema::of_query(&self.client, sql))
