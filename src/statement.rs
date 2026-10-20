@@ -21,8 +21,8 @@ use arrow_schema::{ArrowError, DataType, Field, Schema, TimeUnit};
 use clickhouse::Client;
 use clickhouse::query::Query;
 
-use crate::schema;
 use crate::options::OptionValueExt;
+use crate::schema;
 use crate::writer::ArrowStreamWriter;
 use crate::{AugmentedClient, Result, TokioContext, options, random_id};
 use clickhouse::_priv::sql_escape_identifier;
@@ -258,12 +258,12 @@ impl Statement for ClickhouseStatement {
             StatementMode::Unset => {
                 return Err(Error::with_message_and_status(
                     "SQL query or bulk ingest options must be set before statement execution",
-                Status::InvalidState,
+                    Status::InvalidState,
                 ));
             }
             StatementMode::BulkIngest(_) => {
                 // (comment copied)
-                // There isn't a sensible thing to return here since bulk inserts aren't generally 
+                // There isn't a sensible thing to return here since bulk inserts aren't generally
                 // expected to return a result set; we could return an empty reader, but that would
                 // require adding special casing to `ArrowStreamReader`, or dynamic dispatch.
                 // https://arrow.apache.org/adbc/current/format/specification.html#bulk-data-ingestion
