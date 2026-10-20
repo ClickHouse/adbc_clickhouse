@@ -314,9 +314,12 @@ fn arrow_decimal(scale: &u8, precision: &u8, kind: &DecimalType) -> Result<DataT
         )
     })?;
 
+    // CH arrow serialization maps Decimal32/64 to 128
+    // see:
+    // https://github.com/ClickHouse/ClickHouse/blob/be9434c24112772777fc14021fe1d4703423d495/src/Processors/Formats/Impl/CHColumnToArrowColumn.cpp#L1684-L1691
     match kind {
-        DecimalType::Decimal32 => Ok(DataType::Decimal32(*scale, precision)),
-        DecimalType::Decimal64 => Ok(DataType::Decimal64(*scale, precision)),
+        DecimalType::Decimal32 => Ok(DataType::Decimal128(*scale, precision)),
+        DecimalType::Decimal64 => Ok(DataType::Decimal128(*scale, precision)),
         DecimalType::Decimal128 => Ok(DataType::Decimal128(*scale, precision)),
         DecimalType::Decimal256 => Ok(DataType::Decimal256(*scale, precision)),
     }
