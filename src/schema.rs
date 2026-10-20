@@ -166,6 +166,52 @@ pub async fn of_table(
     Ok(Schema::new(fields))
 }
 
+pub async fn of_query(client: &Client, sql: &str) -> adbc_core::error::Result<Schema> {
+    // get arrow schema of result set without executing
+    // mirrors of_table()
+
+    // wraps query in DESCRIBE
+    let query = client.query_raw(&format!("DESCRIBE ({sql})"));
+
+    // following code copied from of_table
+    // with appropriate modifications
+
+    let mut columns = query.fetch::<Column>().map_err(|e| {
+        Error::with_message_and_status(
+            format!("error beginning fetch of subquery schema: {e}"),
+            Status::Internal,
+        )
+    })?;
+
+    // (copied from of_table())
+    // Some type mappings can be affected by dynamic settings,
+    // so we have to query those as well.
+    //
+    // If `get_table_schema()` turns out to be performance-sensitive,
+    // we could issue this query at the same time as the `DESCRIBE TABLE`.
+    let settings = Settings::query(client).await?;
+
+    let mut fields = Vec::new();
+
+    while let Some(column) = columns.next().await.map_err(|e| {
+        Error::with_message_and_status(
+            format!("error retrieving schema of subquery {sql:?}: {e}"),
+            Status::Internal,
+        )
+    })? {
+        let field = column_to_arrow(&column, &settings).map_err(|e| Error {
+            message: format!(
+                "error mapping column {:?} of subquery {sql:?}: {}",
+                column.name, e.message
+            ),
+            ..e
+        })?;
+
+        fields.push(field);
+    }
+    Ok(Schema::new(fields))
+}
+
 fn column_to_arrow(column: &Column, settings: &Settings) -> Result<Field> {
     let ch_type = DataTypeNode::new(&column.r#type).map_err(|e| {
         Error::with_message_and_status(
@@ -314,9 +360,12 @@ fn arrow_decimal(scale: &u8, precision: &u8, kind: &DecimalType) -> Result<DataT
         )
     })?;
 
+    // CH arrow serialization maps Decimal32/64 to 128
+    // see:
+    // https://github.com/ClickHouse/ClickHouse/blob/be9434c24112772777fc14021fe1d4703423d495/src/Processors/Formats/Impl/CHColumnToArrowColumn.cpp#L1684-L1691
     match kind {
-        DecimalType::Decimal32 => Ok(DataType::Decimal32(*scale, precision)),
-        DecimalType::Decimal64 => Ok(DataType::Decimal64(*scale, precision)),
+        DecimalType::Decimal32 => Ok(DataType::Decimal128(*scale, precision)),
+        DecimalType::Decimal64 => Ok(DataType::Decimal128(*scale, precision)),
         DecimalType::Decimal128 => Ok(DataType::Decimal128(*scale, precision)),
         DecimalType::Decimal256 => Ok(DataType::Decimal256(*scale, precision)),
     }
