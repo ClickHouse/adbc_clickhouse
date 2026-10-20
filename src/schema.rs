@@ -313,7 +313,7 @@ fn arrow_decimal(scale: &u8, precision: &u8, kind: &DecimalType) -> Result<DataT
             Status::InvalidData,
         )
     })?;
-    
+
     // CH arrow serialization maps Decimal32/64 to 128
     // see:
     // https://github.com/ClickHouse/ClickHouse/blob/be9434c24112772777fc14021fe1d4703423d495/src/Processors/Formats/Impl/CHColumnToArrowColumn.cpp#L1684-L1691
