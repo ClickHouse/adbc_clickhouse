@@ -404,6 +404,7 @@ impl Database for ClickhouseDatabase {
                 if tls.is_empty() {
                     Client::default()
                 } else {
+                    tls.require_https(self.url.as_ref().map(Url::scheme))?;
                     let connector = tls.build_https_connector()?;
                     let http = hyper_util::client::legacy::Client::builder(
                         hyper_util::rt::TokioExecutor::new(),
@@ -1115,6 +1116,66 @@ mod tests {
     use adbc_core::options::{OptionConnection, OptionDatabase, OptionValue};
     use adbc_core::{Connection, Database, Driver, Optionable};
     use url::Url;
+
+    #[cfg(feature = "tls-mtls")]
+    fn database_declaring_tls(uri: Option<&str>, identity: bool) -> crate::ClickhouseDatabase {
+        use crate::tls::tests::{CA_PEM, CLIENT_CERT_PEM, CLIENT_KEY_PEM};
+
+        let mut opts = Vec::<(OptionDatabase, OptionValue)>::new();
+        if let Some(uri) = uri {
+            opts.push((OptionDatabase::Uri, uri.into()));
+        }
+        if identity {
+            opts.push((options::MTLS_CERT_CHAIN.into(), CLIENT_CERT_PEM.into()));
+            opts.push((options::MTLS_PRIVATE_KEY.into(), CLIENT_KEY_PEM.into()));
+        } else {
+            opts.push((options::TLS_ROOT_CERTS.into(), CA_PEM.into()));
+        }
+        ClickhouseDriver::init()
+            .new_database_with_opts(opts)
+            .unwrap()
+    }
+
+    #[cfg(feature = "tls-mtls")]
+    #[test]
+    fn a_declared_tls_setting_is_refused_on_an_http_uri() {
+        for (uri, identity, setting) in [
+            (Some("http://127.0.0.1:1"), false, options::TLS_ROOT_CERTS),
+            (Some("http://127.0.0.1:1"), true, options::MTLS_CERT_CHAIN),
+            (None, false, options::TLS_ROOT_CERTS),
+        ] {
+            let db = database_declaring_tls(uri, identity);
+
+            let Err(err) = db.new_connection() else {
+                panic!("{setting} declared with URI {uri:?} should be refused");
+            };
+
+            assert_eq!(err.status, Status::InvalidArguments, "{err:?}");
+            assert!(err.message.contains("requires an https URI"), "{err:?}");
+            assert!(err.message.contains(setting), "{err:?}");
+        }
+    }
+
+    #[cfg(feature = "tls-mtls")]
+    #[test]
+    fn a_declared_tls_root_on_an_https_uri_reaches_the_dial() {
+        use adbc_core::Statement as _;
+
+        let db = database_declaring_tls(Some("https://127.0.0.1:1"), false);
+
+        let mut conn = db.new_connection().unwrap();
+
+        let mut statement = conn.new_statement().unwrap();
+        statement.set_sql_query("SELECT 1").unwrap();
+
+        // Nothing listens on port 1, so the query fails at the connection, not at the option check.
+        let Err(err) = statement.execute() else {
+            panic!("nothing listens on port 1, so no query should be answered");
+        };
+
+        assert!(!err.message.contains("requires an https URI"), "{err:?}");
+        assert_ne!(err.status, Status::InvalidArguments, "{err:?}");
+    }
 
     #[test]
     fn test_set_product_info() {

@@ -56,6 +56,32 @@ impl TlsOptions {
             && self.client_private_key.is_none()
     }
 
+    /// Refuse a declared TLS setting on a URI that is not `https`.
+    ///
+    /// `scheme` is the scheme of the configured URI, or `None` where none is configured and the
+    /// client's default (`http`) applies.
+    #[cfg(feature = "tls-mtls")]
+    pub(crate) fn require_https(&self, scheme: Option<&str>) -> Result<(), Error> {
+        let declared = [
+            (TLS_ROOT_CERTS, self.root_certs.is_some()),
+            (MTLS_CERT_CHAIN, self.client_cert_chain.is_some()),
+            (MTLS_PRIVATE_KEY, self.client_private_key.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(name, set)| set.then_some(name))
+        .collect::<Vec<_>>();
+        if declared.is_empty() || scheme == Some("https") {
+            return Ok(());
+        }
+        Err(Error::with_message_and_status(
+            format!(
+                "a declared TLS setting requires an https URI: {declared:?} set, URI scheme is {:?}",
+                scheme.unwrap_or("http"),
+            ),
+            Status::InvalidArguments,
+        ))
+    }
+
     /// Validate and store a single option value.
     ///
     /// Malformed PEM is refused with [`Status::InvalidArguments`] immediately. The mutual-TLS
@@ -250,11 +276,11 @@ fn unknown_option(key: &str) -> Error {
 }
 
 #[cfg(all(test, feature = "tls-mtls"))]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use adbc_core::error::Status;
 
-    const CA_PEM: &str = r#"-----BEGIN CERTIFICATE-----
+    pub(crate) const CA_PEM: &str = r#"-----BEGIN CERTIFICATE-----
 MIIC1DCCAbygAwIBAgIJAN6l6UQNGiZvMA0GCSqGSIb3DQEBCwUAMBcxFTATBgNV
 BAMMDGFkYmMtdGVzdC1jYTAeFw0yNjEwMDIxMTU1NDRaFw0zNjA5MjkxMTU1NDRa
 MBcxFTATBgNVBAMMDGFkYmMtdGVzdC1jYTCCASIwDQYJKoZIhvcNAQEBBQADggEP
@@ -272,7 +298,7 @@ XZ7jVyZrco9+kOaR+NKVJOkFA7yja/jp9nhNfE28pO4bYdkhW43sEZM5SaWeV3vH
 HBrp40dYSiXyHQRNhvjh+lATV+VRGQX+ZgZH/i5PUSyiokFBY9duhcMmq4uQUUA8
 BAVnu77lGtc=
 -----END CERTIFICATE-----"#;
-    const CLIENT_CERT_PEM: &str = r#"-----BEGIN CERTIFICATE-----
+    pub(crate) const CLIENT_CERT_PEM: &str = r#"-----BEGIN CERTIFICATE-----
 MIIC3TCCAcWgAwIBAgIJAKO/xlCxuIUKMA0GCSqGSIb3DQEBCwUAMBcxFTATBgNV
 BAMMDGFkYmMtdGVzdC1jYTAeFw0yNjEwMDIxMTU1NDRaFw0zNjA5MjkxMTU1NDRa
 MBExDzANBgNVBAMMBmNsaWVudDCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoC
@@ -290,7 +316,7 @@ dfKncbqZTeZgweYpf46nW5J0sMADgCx43JY7mBG61uGitReG1ROII+987wFUAFK4
 Rm9QLDqbJXM9G8IpZMLt0lMaFW5t4YJATzK9VzpgsQIpJjqQ6yFGAP+eKZLlNPHT
 3dpoWDnAH7z6djCo2eocDzM=
 -----END CERTIFICATE-----"#;
-    const CLIENT_KEY_PEM: &str = r#"-----BEGIN RSA PRIVATE KEY-----
+    pub(crate) const CLIENT_KEY_PEM: &str = r#"-----BEGIN RSA PRIVATE KEY-----
 MIIEpQIBAAKCAQEAxdf356jWQwvCJtt7jMSuRChcZC0VyCq8i+MtOkeDOTSLx990
 pJ2mB/HjmHPljoiSywc7Ll9bVP9FKzpYMJ6SPV/gL9zp//qAAXsVXawdIjsrOy3Z
 CEBihvIdV/YM5hh8IvmvuN112C7Ckuc/ITQsFMVe1kgTxvStmanLIK5HRGrP4k9G
@@ -390,5 +416,27 @@ O6N3BhqxCUTBtZJDOj2gZP5b1REU3YrRIbCNPX8Z29s1ZSXCRCenGUc=
         opts.try_set(MTLS_PRIVATE_KEY, CLIENT_KEY_PEM.into())
             .unwrap();
         opts.build_https_connector().unwrap();
+    }
+
+    #[test]
+    fn declared_tls_requires_an_https_uri() {
+        // Nothing declared: any scheme (or none) is accepted.
+        TlsOptions::default().require_https(None).unwrap();
+        TlsOptions::default().require_https(Some("http")).unwrap();
+
+        let mut opts = TlsOptions::default();
+        opts.try_set(TLS_ROOT_CERTS, CA_PEM.into()).unwrap();
+        opts.require_https(Some("https")).unwrap();
+
+        for scheme in [None, Some("http")] {
+            let err = opts.require_https(scheme).unwrap_err();
+            assert_eq!(err.status, Status::InvalidArguments);
+            assert!(err.message.contains(TLS_ROOT_CERTS));
+        }
+
+        let mut opts = TlsOptions::default();
+        opts.try_set(MTLS_PRIVATE_KEY, CLIENT_KEY_PEM.into())
+            .unwrap();
+        assert!(opts.require_https(Some("http")).is_err());
     }
 }
