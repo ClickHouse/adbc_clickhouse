@@ -19,11 +19,38 @@ crate-type = ["lib", "cdylib"]
 ffi = ["adbc_ffi"]
 
 native-tls = ["clickhouse/native-tls"]
-rustls-tls = ["clickhouse/rustls-tls"]
-rustls-tls-aws-lc = ["clickhouse/rustls-tls-aws-lc"]
-rustls-tls-ring = ["clickhouse/rustls-tls-ring"]
-rustls-tls-native-roots = ["clickhouse/rustls-tls-native-roots"]
-rustls-tls-webpki-roots = ["clickhouse/rustls-tls-webpki-roots"]
+
+# Enable both a crypto provider (`rustls-tls-aws-lc`) and a root store
+# (`rustls-tls-webpki-roots`), mirroring the `rustls-tls` feature of the
+# underlying `clickhouse` crate.
+rustls-tls = ["rustls-tls-aws-lc", "rustls-tls-webpki-roots"]
+rustls-tls-aws-lc = [
+    "clickhouse/rustls-tls-aws-lc",
+    "hyper-rustls?/aws-lc-rs",
+    "tls-mtls",
+]
+rustls-tls-ring = [
+    "clickhouse/rustls-tls-ring",
+    "hyper-rustls?/ring",
+    "tls-mtls",
+]
+rustls-tls-native-roots = [
+    "clickhouse/rustls-tls-native-roots",
+    "hyper-rustls?/native-tokio",
+]
+rustls-tls-webpki-roots = [
+    "clickhouse/rustls-tls-webpki-roots",
+    "hyper-rustls?/webpki-tokio",
+]
+# Internal: enables the driver's custom TLS root bundle and mutual TLS support.
+# It needs a crypto provider, so it is only ever turned on by
+# `rustls-tls-aws-lc`/`rustls-tls-ring`.
+tls-mtls = [
+    "dep:rustls",
+    "dep:hyper-rustls",
+    "dep:hyper-util",
+    "dep:rustls-pemfile",
+]
 
 [dependencies]
 arrow-array = "58.3.0"
@@ -65,6 +92,28 @@ features = ["rt"]
 [dependencies.uuid]
 version = "1.23.3"
 features = ["serde"]
+
+# Used to build a `rustls::ClientConfig` when the `rustls-tls-*` features are enabled.
+[dependencies.hyper-rustls]
+version = "0.27"
+optional = true
+default-features = false
+features = ["http1", "tls12"]
+
+[dependencies.hyper-util]
+version = "0.1"
+optional = true
+features = ["client-legacy", "http1", "tokio"]
+
+[dependencies.rustls]
+version = "0.23"
+optional = true
+default-features = false
+
+[dependencies.rustls-pemfile]
+version = "2"
+optional = true
+features = ["std"]
 
 [[test]]
 name = "it"
