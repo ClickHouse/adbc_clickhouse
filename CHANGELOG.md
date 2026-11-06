@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+* Updated the `clickhouse` crate to 0.15.3. Every read against ClickHouse 26.9+ failed with
+  `decompression error: incorrect magic number`, because the server's default compression codec
+  changed to ZSTD while the client still expected LZ4-framed responses
+  (upstream: [clickhouse-rs#468], fixed in [clickhouse-rs#482]). ([#86])
+
+[#86]: https://github.com/ClickHouse/adbc_clickhouse/issues/86
+[clickhouse-rs#468]: https://github.com/ClickHouse/clickhouse-rs/issues/468
+[clickhouse-rs#482]: https://github.com/ClickHouse/clickhouse-rs/pull/482
+
 ## [0.1.1] - 2026-08-31
 
 ### Added
