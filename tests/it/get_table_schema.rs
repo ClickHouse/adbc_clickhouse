@@ -282,7 +282,7 @@ Schema {
         },
         Field {
             name: \"decimal32_9_4\",
-            data_type: Decimal32(
+            data_type: Decimal128(
                 9,
                 4,
             ),
@@ -292,7 +292,7 @@ Schema {
         },
         Field {
             name: \"decimal64_18_8\",
-            data_type: Decimal64(
+            data_type: Decimal128(
                 18,
                 8,
             ),
