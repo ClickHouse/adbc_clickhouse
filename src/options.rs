@@ -164,6 +164,56 @@ pub const QUERY_ID: &str = "clickhouse.client.query_id";
 /// as Arrow binary strings instead.
 pub const OUTPUT_STRING_AS_STRING: &str = "clickhouse.client.output_string_as_string";
 
+/// Transport compression between the driver and ClickHouse: `"lz4"` (the default) or `"none"`.
+///
+/// With `"lz4"`, ClickHouse compresses each query response into LZ4 blocks (the HTTP `compress=1`
+/// parameter) and the driver decompresses them; `INSERT` data is compressed by the driver.
+/// With `"none"`, data is sent as is.
+///
+/// ClickHouse compresses a query's response on a single thread, so LZ4 can limit the throughput
+/// of one query to well below what a fast network carries. On fast links, `"none"` is often
+/// faster; on slow links, `"lz4"` sends fewer bytes.
+///
+/// May be set on [`ClickhouseDatabase`] only, and applies to every connection it creates.
+/// The current value may be read back with [`Optionable::get_option_string()`].
+///
+/// # Example
+/// ```rust
+/// use adbc_clickhouse::ClickhouseDriver;
+///
+/// use adbc_core::{Driver, Optionable};
+///
+/// let mut driver = ClickhouseDriver::init();
+///
+/// let db = driver
+///     .new_database_with_opts([(adbc_clickhouse::options::COMPRESSION.into(), "none".into())])
+///     .unwrap();
+///
+/// assert_eq!(
+///     db.get_option_string(adbc_clickhouse::options::COMPRESSION.into()).unwrap(),
+///     "none"
+/// );
+/// ```
+pub const COMPRESSION: &str = "clickhouse.client.compression";
+
+pub(crate) fn parse_compression(value: &str) -> Result<clickhouse::Compression, Error> {
+    match value.to_ascii_lowercase().as_str() {
+        "none" => Ok(clickhouse::Compression::None),
+        "lz4" => Ok(clickhouse::Compression::Lz4),
+        _ => Err(Error::with_message_and_status(
+            format!("invalid value for {COMPRESSION:?}: {value:?} (expected \"lz4\" or \"none\")"),
+            Status::InvalidArguments,
+        )),
+    }
+}
+
+pub(crate) fn compression_name(compression: clickhouse::Compression) -> &'static str {
+    match compression {
+        clickhouse::Compression::None => "none",
+        _ => "lz4",
+    }
+}
+
 /// Prefix for passing arbitrary [ClickHouse settings] through as driver options.
 ///
 /// An option key of the form `clickhouse.setting.<setting_name>` maps directly to the

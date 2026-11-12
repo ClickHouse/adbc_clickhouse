@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+* Added the `clickhouse.client.compression` database option to choose the transport compression:
+  `"lz4"` (the default) or `"none"`. ClickHouse compresses each query response on a single thread,
+  so `"none"` can be much faster on fast networks.
+
 ## [0.1.2] - 2026-11-06
 
 ### Fixed

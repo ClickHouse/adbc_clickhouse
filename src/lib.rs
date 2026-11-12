@@ -242,6 +242,7 @@ impl Driver for ClickhouseDriver {
             password: None,
             product_info: self.product_info.clone(),
             settings: HashMap::new(),
+            compression: None,
         };
 
         for (key, value) in opts {
@@ -356,6 +357,8 @@ pub struct ClickhouseDatabase {
     password: Option<String>,
     product_info: ProductInfo,
     settings: HashMap<String, String>,
+    /// `None` keeps the `clickhouse` crate's default (LZ4).
+    compression: Option<clickhouse::Compression>,
 }
 
 impl Database for ClickhouseDatabase {
@@ -385,6 +388,10 @@ impl Database for ClickhouseDatabase {
             // Note: we don't apply `self.product_info` at this level in case it's set
             // to a different value at a lower level; `AugmentedClient` covers that.
             .with_product_info("adbc_clickhouse", env!("CARGO_PKG_VERSION"));
+
+        if let Some(compression) = self.compression {
+            client = client.with_compression(compression);
+        }
 
         if let Some(url) = &self.url {
             client = client.with_url(url.to_string());
@@ -583,6 +590,9 @@ impl ClickhouseDatabase {
             options::PRODUCT_INFO => {
                 self.product_info = value.try_into()?;
             }
+            options::COMPRESSION => {
+                self.compression = Some(options::parse_compression(&value.try_string(key)?)?);
+            }
             other => {
                 return Err(Error::with_message_and_status(
                     format!("unknown database option {other:?}"),
@@ -605,6 +615,10 @@ impl ClickhouseDatabase {
 
         match key {
             options::PRODUCT_INFO => Ok(self.product_info.to_string()),
+            options::COMPRESSION => Ok(options::compression_name(
+                self.compression.unwrap_or(clickhouse::Compression::Lz4),
+            )
+            .to_string()),
             other => Err(Error::with_message_and_status(
                 format!("unknown database option {other:?}"),
                 Status::InvalidArguments,
