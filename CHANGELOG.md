@@ -10,13 +10,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 * Implemented `Connection::get_option_string()` for `OptionConnection::AutoCommit`
   (always `"true"`, as ClickHouse has no transactions) and `OptionConnection::CurrentCatalog`
-  (always empty, as ClickHouse has no catalog level above the database). ([#8])
-    * Driver managers read these back before they will use a connection, so erroring on
-      them can make the driver unusable through one.
-    * `Connection::get_option_bytes()` defers to `get_option_string()`, and `get_option_int()`/
-      `get_option_double()` report `InvalidArguments`, matching `ClickhouseDatabase`.
+  (always empty, as ClickHouse has no catalog level above the database). ([#65])
 
-[#8]: https://github.com/ClickHouse/adbc_clickhouse/issues/8
+[#65]: https://github.com/ClickHouse/adbc_clickhouse/pull/65
+
+## [0.1.2] - 2026-11-06
+
+### Fixed
+
+* Changed `Connection::get_table_schema()` to return `Decimal128` for all decimal types to match server behavior. ([#78])
+* Updated the `clickhouse` crate to 0.15.3. ([#86])
+  * Fixes `decompression error: incorrect magic number` against ClickHouse 26.9+
+    (upstream: [clickhouse-rs#468], fixed in [clickhouse-rs#482]). 
+
+[#78]: https://github.com/ClickHouse/adbc_clickhouse/pull/78
+[#86]: https://github.com/ClickHouse/adbc_clickhouse/issues/86
+[clickhouse-rs#468]: https://github.com/ClickHouse/clickhouse-rs/issues/468
+[clickhouse-rs#482]: https://github.com/ClickHouse/clickhouse-rs/pull/482
 
 ## [0.1.1] - 2026-08-31
 
@@ -110,7 +120,8 @@ However, the core query flow is supported:
 * Binding a statement in streaming insert mode with `Statement::bind_stream()`
 * Executing a statement with `Statement::execute()` or `Statement::execute_update()`
 
-[Unreleased]: https://github.com/ClickHouse/adbc_clickhouse/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/ClickHouse/adbc_clickhouse/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/ClickHouse/adbc_clickhouse/compare/v0.1.1...0.1.2
 [0.1.1]: https://github.com/ClickHouse/adbc_clickhouse/compare/v0.1.0...0.1.1
 [0.1.0]: https://github.com/ClickHouse/adbc_clickhouse/compare/v0.1.0-alpha.1...v0.1.0
 [0.1.0-alpha.1]: https://github.com/ClickHouse/adbc_clickhouse/releases/tag/v0.1.0-alpha.1

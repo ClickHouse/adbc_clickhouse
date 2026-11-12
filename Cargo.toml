@@ -1,6 +1,6 @@
 [package]
 name = "adbc_clickhouse"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "Official ClickHouse ADBC driver."
 authors = [
@@ -26,10 +26,11 @@ rustls-tls-native-roots = ["clickhouse/rustls-tls-native-roots"]
 rustls-tls-webpki-roots = ["clickhouse/rustls-tls-webpki-roots"]
 
 [dependencies]
-arrow-array = "58.3.0"
-arrow-buffer = "58.3.0"
-arrow-ipc = "58.3.0"
-arrow-schema = "58.3.0"
+# https://nvd.nist.gov/vuln/detail/cve-2026-111959
+arrow-array = "58.4.1"
+arrow-buffer = "58.4.1"
+arrow-ipc = "58.4.1"
+arrow-schema = "58.4.1"
 
 adbc_core = "0.23.0"
 adbc_ffi = { version = "0.23.0", optional = true }
@@ -44,7 +45,7 @@ tracing = "0.1.44"
 url = "2.5.8"
 
 [dependencies.clickhouse]
-version = "0.15.2"
+version = "0.15.3"
 
 [dependencies.rand]
 version = "0.10.1"
