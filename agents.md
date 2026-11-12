@@ -34,6 +34,8 @@ A primer for AI agents working on this repository. Read this before doing substa
 
 - **`Date` in `ArrowStream` depends on the server version.** ClickHouse 26.2 added `output_format_arrow_date_as_uint16` (default `0` → Arrow `date32`); 26.1 and older lack the setting and always write `uint16` (checked against the 25.8, 26.1, 26.2 and 26.10 Docker images). Declared schemas (`get_table_schema`, `execute_schema`) must follow it via `Settings::query()`.
 
+- **A session runs one HTTP request at a time.** A request arriving while another holds the session fails with `SESSION_IS_LOCKED` (373) before any data, e.g. the next query after a result set is dropped unread (the server is still finishing it). `retry_if_session_locked()` in `statement.rs` covers `execute()`/`execute_schema()`; repro in `tests/it/session.rs`.
+
 ## Related local repos worth referencing
 
 - `/Users/josemunoz/repos/clickhouse-rs` — the underlying ClickHouse client. Useful files: `src/response.rs` (HTTP error filtering), `src/cursors/*` (fused stream behavior), `src/query.rs` (`fetch_bytes` / `execute`).

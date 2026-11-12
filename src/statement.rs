@@ -276,22 +276,25 @@ impl Statement for ClickhouseStatement {
 
         let _guard = self.tokio.enter();
 
-        // This statement's query ID is reused for its eventual data query. Give each metadata
-        // request its own ID, so ClickHouse does not reject the data query (or the second
-        // metadata request) while an earlier request with the same ID is still being cleaned up.
-        let mut schema_client = Client::clone(&self.client);
-        schema_client.set_setting(options::as_setting::QUERY_ID, random_id("schema"));
-        let mut settings_client = schema_client.clone();
-        settings_client.set_setting(options::as_setting::QUERY_ID, random_id("schema_settings"));
+        retry_if_session_locked(|| {
+            // This statement's query ID is reused for its eventual data query. Give each metadata
+            // request its own ID, so ClickHouse does not reject the data query (or the second
+            // metadata request) while an earlier request with the same ID is still being cleaned up.
+            let mut schema_client = Client::clone(&self.client);
+            schema_client.set_setting(options::as_setting::QUERY_ID, random_id("schema"));
+            let mut settings_client = schema_client.clone();
+            settings_client
+                .set_setting(options::as_setting::QUERY_ID, random_id("schema_settings"));
 
-        // Raw so a literal `?` is not treated as a bind placeholder.
-        let mut query = schema_client.query_raw(&format!("DESCRIBE ({sql})"));
-        if let Some(BindType::Single(batch)) = &self.bind {
-            query = bind_record_batch(query, batch.clone())?;
-        }
+            // Raw so a literal `?` is not treated as a bind placeholder.
+            let mut query = schema_client.query_raw(&format!("DESCRIBE ({sql})"));
+            if let Some(BindType::Single(batch)) = &self.bind {
+                query = bind_record_batch(query, batch.clone())?;
+            }
 
-        self.tokio
-            .block_on(schema::of_query(&settings_client, query))
+            self.tokio
+                .block_on(schema::of_query(&settings_client, query))
+        })
     }
 
     /// # Not Implemented
@@ -989,18 +992,49 @@ fn fetch_blocking(
     // but that results in a larger generated future type
     let _guard = tokio.enter();
 
-    // Raw so a literal `?` is not treated as a bind placeholder;
-    // parameters are bound server-side via `Query::param()`.
-    let mut query = client.query_raw(sql);
-    query = bind_query(query, bind)?;
+    let fetch = |bind: Option<BindType>| -> Result<ArrowStreamReader, Error> {
+        // Raw so a literal `?` is not treated as a bind placeholder;
+        // parameters are bound server-side via `Query::param()`.
+        let mut query = client.query_raw(sql);
+        query = bind_query(query, bind)?;
 
-    let cursor = query.fetch_arrow().map_err(|e| {
-        Error::with_message_and_status(format!("error executing query: {e}"), Status::Internal)
-    })?;
+        let cursor = query.fetch_arrow().map_err(|e| {
+            Error::with_message_and_status(format!("error executing query: {e}"), Status::Internal)
+        })?;
 
-    tokio
-        .block_on(ArrowStreamReader::begin(tokio.clone(), cursor))
-        .map_err(Into::into)
+        tokio
+            .block_on(ArrowStreamReader::begin(tokio.clone(), cursor))
+            .map_err(Into::into)
+    };
+
+    match bind {
+        // A streamed bind cannot be replayed.
+        Some(BindType::Stream(stream)) => fetch(Some(BindType::Stream(stream))),
+        Some(BindType::Single(batch)) => {
+            retry_if_session_locked(|| fetch(Some(BindType::Single(batch.clone()))))
+        }
+        None => retry_if_session_locked(|| fetch(None)),
+    }
+}
+
+/// ClickHouse runs one request at a time per session and rejects a request that arrives while
+/// another one holds the session (`SESSION_IS_LOCKED`, code 373). That happens, for example, when
+/// a result set is dropped before it is fully read: the server is still finishing that query when
+/// the next request arrives. The error comes before any data, so retry for about five seconds.
+fn retry_if_session_locked<T>(mut request: impl FnMut() -> Result<T, Error>) -> Result<T, Error> {
+    const RETRY_LIMIT: u32 = 30;
+    let mut attempt = 0;
+    loop {
+        match request() {
+            Err(e) if attempt < RETRY_LIMIT && e.message.contains("SESSION_IS_LOCKED") => {
+                // 5, 10, 20, ... ms, capped at 200 ms.
+                let delay_ms = (5u64 << attempt.min(6)).min(200);
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                attempt += 1;
+            }
+            result => return result,
+        }
+    }
 }
 
 fn execute_blocking(

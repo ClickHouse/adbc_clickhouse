@@ -16,6 +16,7 @@ mod database;
 mod execute_schema;
 mod get_table_schema;
 mod params;
+mod session;
 mod settings;
 
 // NOTE: tests run with the `current-thread` runtime by default.

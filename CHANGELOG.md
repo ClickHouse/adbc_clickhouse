@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Map ClickHouse `Date` to Arrow `Date32` when `output_format_arrow_date_as_uint16` is `0`, the default
   since ClickHouse 26.2, so `Connection::get_table_schema()` and `Statement::execute_schema()` match the
   data `Statement::execute()` returns. Older servers, which always write `Date` as `UInt16`, are unchanged.
+* Retry `Statement::execute()` and `Statement::execute_schema()` for up to about five seconds when
+  ClickHouse rejects them with `SESSION_IS_LOCKED`, which happened on any query sent right after a
+  result set on the same connection was dropped before it was fully read.
 
 ## [0.1.2] - 2026-11-06
 
