@@ -1,6 +1,7 @@
 use adbc_core::error::{Error, Status};
 use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
 use clickhouse::Client;
+use clickhouse::query::Query;
 use clickhouse_types::DataTypeNode;
 use clickhouse_types::data_types::{DateTimePrecision, DecimalType, EnumType};
 use serde::{Deserialize, Deserializer};
@@ -157,6 +158,49 @@ pub async fn of_table(
                     column.name, e.message
                 )
             },
+            ..e
+        })?;
+
+        fields.push(field);
+    }
+
+    Ok(Schema::new(fields))
+}
+
+/// Describe the result columns of a query prepared as `DESCRIBE (<query>)`.
+///
+/// The columns are mapped with the same type mapping (and the same server settings) as
+/// [`of_table()`], so the schema matches the Arrow stream ClickHouse returns for the query.
+pub async fn of_query(client: &Client, query: Query) -> adbc_core::error::Result<Schema> {
+    let mut cursor = query.fetch::<Column>().map_err(|e| {
+        Error::with_message_and_status(
+            format!("error beginning fetch of query schema: {e}"),
+            Status::Internal,
+        )
+    })?;
+
+    let mut columns = Vec::new();
+    while let Some(column) = cursor.next().await.map_err(|e| {
+        Error::with_message_and_status(
+            format!("error retrieving query schema: {e}"),
+            Status::Internal,
+        )
+    })? {
+        columns.push(column);
+    }
+    drop(cursor);
+
+    // Both requests carry the connection's session ID, and ClickHouse rejects a request that
+    // overlaps another on the same session, so finish `DESCRIBE` before querying the settings.
+    let settings = Settings::query(client).await?;
+
+    let mut fields = Vec::with_capacity(columns.len());
+    for column in &columns {
+        let field = column_to_arrow(column, &settings).map_err(|e| Error {
+            message: format!(
+                "error mapping query column {:?}: {}",
+                column.name, e.message
+            ),
             ..e
         })?;
 

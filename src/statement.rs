@@ -23,7 +23,7 @@ use clickhouse::query::Query;
 
 use crate::options::OptionValueExt;
 use crate::writer::ArrowStreamWriter;
-use crate::{AugmentedClient, Result, TokioContext, options, random_id};
+use crate::{AugmentedClient, Result, TokioContext, options, random_id, schema};
 use clickhouse::_priv::sql_escape_identifier;
 use clickhouse_ext_arrow::ArrowQueryExt;
 
@@ -251,13 +251,47 @@ impl Statement for ClickhouseStatement {
         execute_streaming_ingest(&self.client, &self.tokio, ingest, stream)
     }
 
-    /// # Not Implemented
-    /// Currently will return an error with [`Status::NotImplemented`].
+    /// Get the schema of the query's result set without executing the query.
     ///
-    /// See the tracking issue for details and subscribe for updates:
-    /// <https://github.com/ClickHouse/adbc_clickhouse/issues/16>
+    /// This runs `DESCRIBE (<query>)` on the server and maps the result columns with the same
+    /// type mapping as [`Connection::get_table_schema()`][adbc_core::Connection::get_table_schema],
+    /// so the schema matches the one [`execute()`][Self::execute] returns. Bound parameters
+    /// (from [`bind()`][Self::bind]) are sent with the `DESCRIBE`.
+    ///
+    /// Returns [`Status::InvalidState`] if no query is set, or if the query is an `INSERT`
+    /// that would stream bound data.
     fn execute_schema(&mut self) -> adbc_core::error::Result<Schema> {
-        err_unimplemented!("ClickhouseStatement::execute_schema()")
+        let StatementMode::SqlQuery(sql) = &self.mode else {
+            return Err(Error::with_message_and_status(
+                "execute_schema requires a SQL query",
+                Status::InvalidState,
+            ));
+        };
+        if is_streaming_insert(sql) {
+            return Err(Error::with_message_and_status(
+                "execute_schema requires a query that returns a result set",
+                Status::InvalidState,
+            ));
+        }
+
+        let _guard = self.tokio.enter();
+
+        // This statement's query ID is reused for its eventual data query. Give each metadata
+        // request its own ID, so ClickHouse does not reject the data query (or the second
+        // metadata request) while an earlier request with the same ID is still being cleaned up.
+        let mut schema_client = Client::clone(&self.client);
+        schema_client.set_setting(options::as_setting::QUERY_ID, random_id("schema"));
+        let mut settings_client = schema_client.clone();
+        settings_client.set_setting(options::as_setting::QUERY_ID, random_id("schema_settings"));
+
+        // Raw so a literal `?` is not treated as a bind placeholder.
+        let mut query = schema_client.query_raw(&format!("DESCRIBE ({sql})"));
+        if let Some(BindType::Single(batch)) = &self.bind {
+            query = bind_record_batch(query, batch.clone())?;
+        }
+
+        self.tokio
+            .block_on(schema::of_query(&settings_client, query))
     }
 
     /// # Not Implemented
