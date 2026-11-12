@@ -22,6 +22,7 @@ use clickhouse::Client;
 use clickhouse::query::Query;
 
 use crate::options::OptionValueExt;
+use crate::schema;
 use crate::writer::ArrowStreamWriter;
 use crate::{AugmentedClient, Result, TokioContext, options, random_id};
 use clickhouse::_priv::sql_escape_identifier;
@@ -251,13 +252,40 @@ impl Statement for ClickhouseStatement {
         execute_streaming_ingest(&self.client, &self.tokio, ingest, stream)
     }
 
-    /// # Not Implemented
-    /// Currently will return an error with [`Status::NotImplemented`].
-    ///
-    /// See the tracking issue for details and subscribe for updates:
-    /// <https://github.com/ClickHouse/adbc_clickhouse/issues/16>
     fn execute_schema(&mut self) -> adbc_core::error::Result<Schema> {
-        err_unimplemented!("ClickhouseStatement::execute_schema()")
+        // copying logic from execute
+        let sql = match &self.mode {
+            StatementMode::Unset => {
+                return Err(Error::with_message_and_status(
+                    "SQL query or bulk ingest options must be set before statement execution",
+                    Status::InvalidState,
+                ));
+            }
+            StatementMode::BulkIngest(_) => {
+                // (comment copied)
+                // There isn't a sensible thing to return here since bulk inserts aren't generally
+                // expected to return a result set; we could return an empty reader, but that would
+                // require adding special casing to `ArrowStreamReader`, or dynamic dispatch.
+                // https://arrow.apache.org/adbc/current/format/specification.html#bulk-data-ingestion
+                // as a result, they also don't have a sensible schema that one could return
+                return Err(Error::with_message_and_status(
+                    "no schema to return since bulk ingest may only be used with `Statement::execute_update()`",
+                    Status::InvalidState,
+                ));
+            }
+            StatementMode::SqlQuery(sql) => {
+                if is_streaming_insert(sql) {
+                    // Same as above
+                    return Err(Error::with_message_and_status(
+                        "no schema to return since bulk ingest may only be used with `Statement::execute_update()`",
+                        Status::InvalidState,
+                    ));
+                }
+                sql
+            }
+        };
+        // copying return structure of get_table_schema()
+        self.tokio.block_on(schema::of_query(&self.client, sql))
     }
 
     /// # Not Implemented
