@@ -312,7 +312,7 @@ Schema {
         },
         Field {
             name: \"time_date\",
-            data_type: UInt16,
+            data_type: Date32,
             metadata: {
                 \"CLICKHOUSE:type\": \"Date\",
             },
@@ -392,7 +392,7 @@ Schema {
         },
         Field {
             name: \"chrono_date\",
-            data_type: UInt16,
+            data_type: Date32,
             metadata: {
                 \"CLICKHOUSE:type\": \"Date\",
             },

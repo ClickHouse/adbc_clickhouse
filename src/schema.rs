@@ -39,6 +39,12 @@ struct Settings {
     /// <https://clickhouse.com/docs/operations/settings/formats#output_format_arrow_use_64_bit_indexes_for_dictionary>
     #[serde(deserialize_with = "deserialize_bool_setting")]
     use_64_bit_indexes_for_dictionary: bool,
+    /// <https://clickhouse.com/docs/operations/settings/formats#output_format_arrow_date_as_uint16>
+    ///
+    /// Added in ClickHouse 26.2 with default `0` (`Date` as Arrow `date32`). Older servers lack the
+    /// setting and always write `Date` as `UInt16`, so a missing setting means `true`.
+    #[serde(deserialize_with = "deserialize_bool_setting_default_true")]
+    date_as_uint16: bool,
 }
 
 impl Default for Settings {
@@ -57,6 +63,7 @@ impl Default for Settings {
             low_cardinality_as_dictionary: false,
             use_signed_indexes_for_dictionary: false,
             use_64_bit_indexes_for_dictionary: false,
+            date_as_uint16: true,
         }
     }
 }
@@ -71,6 +78,7 @@ impl Settings {
             "low_cardinality_as_dictionary",
             "use_signed_indexes_for_dictionary",
             "use_64_bit_indexes_for_dictionary",
+            "date_as_uint16",
         ];
 
         let mut sql = "SELECT ".to_string();
@@ -284,7 +292,8 @@ fn ch_type_to_arrow(
         // a canonical extension type in Arrow: https://arrow.apache.org/docs/format/CanonicalExtensions.html#uuid
         // DataTypeNode::UUID => {}
         // https://github.com/ClickHouse/ClickHouse/blob/3196ab525aa6f1fef8d367db7610b765f7737f01/src/Processors/Formats/Impl/CHColumnToArrowColumn.cpp#L86
-        DataTypeNode::Date => Ok(DataType::UInt16),
+        DataTypeNode::Date if settings.date_as_uint16 => Ok(DataType::UInt16),
+        DataTypeNode::Date => Ok(DataType::Date32),
         DataTypeNode::Date32 => Ok(DataType::Date32),
         // https://github.com/ClickHouse/ClickHouse/blob/3196ab525aa6f1fef8d367db7610b765f7737f01/src/Processors/Formats/Impl/CHColumnToArrowColumn.cpp#L87C1-L87C114
         DataTypeNode::DateTime(_) => Ok(DataType::UInt32),
@@ -489,5 +498,20 @@ where
         "0" => Ok(false),
         "1" => Ok(true),
         _ => Err(Error::custom(format!("expected \"0\" or \"1\", got {s:?}"))),
+    }
+}
+
+/// Like [`deserialize_bool_setting`], but a missing setting means `true`.
+fn deserialize_bool_setting_default_true<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    match Option::<String>::deserialize(deserializer)?.as_deref() {
+        None => Ok(true),
+        Some("0") => Ok(false),
+        Some("1") => Ok(true),
+        Some(s) => Err(Error::custom(format!("expected \"0\" or \"1\", got {s:?}"))),
     }
 }
