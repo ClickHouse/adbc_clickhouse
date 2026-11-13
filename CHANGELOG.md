@@ -11,8 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Implemented `Connection::get_option_string()` for `OptionConnection::AutoCommit`
   (always `"true"`, as ClickHouse has no transactions) and `OptionConnection::CurrentCatalog`
   (always empty, as ClickHouse has no catalog level above the database). ([#65])
+* Implemented `Connection::get_info()` for driver/vendor metadata ([#69]).
 
 [#65]: https://github.com/ClickHouse/adbc_clickhouse/pull/65
+[#69]: https://github.com/ClickHouse/adbc_clickhouse/pull/69
 
 ## [0.1.2] - 2026-11-06
 
