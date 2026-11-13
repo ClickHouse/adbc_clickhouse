@@ -1,5 +1,6 @@
 use adbc_clickhouse::options;
-use adbc_core::options::{OptionDatabase, OptionStatement};
+use adbc_core::error::Status;
+use adbc_core::options::{OptionConnection, OptionDatabase, OptionStatement};
 use adbc_core::{Connection, Database, Driver, Optionable, Statement};
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int32Type;
@@ -325,6 +326,45 @@ fn execute_handles_no_result_set_statements() {
     .unwrap();
 
     assert_eq!(joined, expected);
+}
+
+#[test]
+fn connection_option_getters() {
+    let db = test_database();
+    let conn = db.new_connection().unwrap();
+
+    assert_eq!(
+        conn.get_option_string(OptionConnection::AutoCommit)
+            .unwrap(),
+        "true"
+    );
+    assert_eq!(
+        conn.get_option_string(OptionConnection::CurrentCatalog)
+            .unwrap(),
+        ""
+    );
+
+    for option in [OptionConnection::IsolationLevel, OptionConnection::ReadOnly] {
+        let err = conn.get_option_string(option).unwrap_err();
+        assert_eq!(err.status, Status::NotImplemented);
+    }
+
+    assert_eq!(
+        conn.get_option_bytes(OptionConnection::AutoCommit).unwrap(),
+        b"true"
+    );
+    assert_eq!(
+        conn.get_option_int(OptionConnection::AutoCommit)
+            .unwrap_err()
+            .status,
+        Status::InvalidArguments
+    );
+    assert_eq!(
+        conn.get_option_double(OptionConnection::AutoCommit)
+            .unwrap_err()
+            .status,
+        Status::InvalidArguments
+    );
 }
 
 #[test]

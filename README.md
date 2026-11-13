@@ -166,13 +166,13 @@ the driver also exposes three `clickhouse.client.*` options for customizing the 
 * `clickhouse.client.tls_root_certs`: a PEM root bundle that *replaces* the built-in roots used to
   verify the ClickHouse server certificate. This is how deployments running the server behind their
   own TLS endpoints (a private CA or a self-signed certificate) trust them.
-* `clickhouse.client.mtls_cert_chain` and `clickhouse.client.mtls_private_key`: a PEM client
-  certificate chain and matching private key, presented to the server when it requests (or requires)
+* `clickhouse.client.tls_client_cert` and `clickhouse.client.tls_client_key`: a PEM client
+  certificate and matching private key, presented to the server when it requests (or requires)
   a client certificate for mutual TLS.
 
 These options may be set on a `Database` or passed to connection creation via
 `new_connection_with_opts()`. Malformed PEM and a client identity given with only one of its two
-halves (a chain without a key, or a key without a chain) are refused with an `InvalidArguments` error.
+halves (a certificate without a key, or a key without a certificate) are refused with an `InvalidArguments` error.
 The private key is never read back.
 
 [Rustls]: https://github.com/rustls/rustls

@@ -399,7 +399,7 @@ impl Database for ClickhouseDatabase {
         // When TLS options were set we substitute a `hyper-rustls` transport carrying our custom
         // `rustls::ClientConfig` for the default one; otherwise fall back to `Client::default()`.
         let client = {
-            #[cfg(feature = "tls-mtls")]
+            #[cfg(feature = "_tls-mtls")]
             {
                 if tls.is_empty() {
                     Client::default()
@@ -413,7 +413,7 @@ impl Database for ClickhouseDatabase {
                     Client::with_http_client(http)
                 }
             }
-            #[cfg(not(feature = "tls-mtls"))]
+            #[cfg(not(feature = "_tls-mtls"))]
             {
                 Client::default()
             }
@@ -852,21 +852,39 @@ impl Optionable for ClickhouseConnection {
                         Status::NotFound,
                     )
                 }),
+            // ClickHouse has no transactions, so every statement commits as it runs.
+            // Driver managers read this back before using a connection.
+            OptionConnection::AutoCommit => Ok("true".into()),
+            // ClickHouse has no catalog level above the database (an ADBC schema),
+            // so the catalog is always empty rather than unsupported.
+            OptionConnection::CurrentCatalog => Ok(String::new()),
             OptionConnection::Other(s) => self.get_custom_option(&s),
-            other => err_unimplemented!("ClickhouseConnection::get_option_string({other:?})"),
+            other => Err(Error::with_message_and_status(
+                format!("unimplemented connection option: {:?}", other.as_ref()),
+                Status::NotImplemented,
+            )),
         }
     }
 
     fn get_option_bytes(&self, key: Self::Option) -> adbc_core::error::Result<Vec<u8>> {
-        err_unimplemented!("ClickhouseConnection::get_option_bytes({key:?})")
+        // There's no options that are specifically binary-only, so... *shrug*
+        self.get_option_string(key).map(String::into_bytes)
     }
 
     fn get_option_int(&self, key: Self::Option) -> adbc_core::error::Result<i64> {
-        err_unimplemented!("ClickhouseConnection::get_option_int({key:?})")
+        // Currently no connection options that can be integers
+        Err(Error::with_message_and_status(
+            format!("option {:?} is not an integer", key.as_ref()),
+            Status::InvalidArguments,
+        ))
     }
 
     fn get_option_double(&self, key: Self::Option) -> adbc_core::error::Result<f64> {
-        err_unimplemented!("ClickhouseConnection::get_option_double({key:?})")
+        // Currently no connection options that can be doubles
+        Err(Error::with_message_and_status(
+            format!("option {:?} is not a double", key.as_ref()),
+            Status::InvalidArguments,
+        ))
     }
 }
 
@@ -1117,7 +1135,7 @@ mod tests {
     use adbc_core::{Connection, Database, Driver, Optionable};
     use url::Url;
 
-    #[cfg(feature = "tls-mtls")]
+    #[cfg(feature = "_tls-mtls")]
     fn database_declaring_tls(uri: Option<&str>, identity: bool) -> crate::ClickhouseDatabase {
         use crate::tls::tests::{CA_PEM, CLIENT_CERT_PEM, CLIENT_KEY_PEM};
 
@@ -1126,8 +1144,8 @@ mod tests {
             opts.push((OptionDatabase::Uri, uri.into()));
         }
         if identity {
-            opts.push((options::MTLS_CERT_CHAIN.into(), CLIENT_CERT_PEM.into()));
-            opts.push((options::MTLS_PRIVATE_KEY.into(), CLIENT_KEY_PEM.into()));
+            opts.push((options::TLS_CLIENT_CERT.into(), CLIENT_CERT_PEM.into()));
+            opts.push((options::TLS_CLIENT_KEY.into(), CLIENT_KEY_PEM.into()));
         } else {
             opts.push((options::TLS_ROOT_CERTS.into(), CA_PEM.into()));
         }
@@ -1136,12 +1154,12 @@ mod tests {
             .unwrap()
     }
 
-    #[cfg(feature = "tls-mtls")]
+    #[cfg(feature = "_tls-mtls")]
     #[test]
     fn a_declared_tls_setting_is_refused_on_an_http_uri() {
         for (uri, identity, setting) in [
             (Some("http://127.0.0.1:1"), false, options::TLS_ROOT_CERTS),
-            (Some("http://127.0.0.1:1"), true, options::MTLS_CERT_CHAIN),
+            (Some("http://127.0.0.1:1"), true, options::TLS_CLIENT_CERT),
             (None, false, options::TLS_ROOT_CERTS),
         ] {
             let db = database_declaring_tls(uri, identity);
@@ -1156,7 +1174,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "tls-mtls")]
+    #[cfg(feature = "_tls-mtls")]
     #[test]
     fn a_declared_tls_root_on_an_https_uri_reaches_the_dial() {
         use adbc_core::Statement as _;
