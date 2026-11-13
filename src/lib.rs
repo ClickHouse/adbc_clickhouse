@@ -128,6 +128,7 @@ pub mod options;
 mod reader;
 mod schema;
 mod statement;
+mod tls;
 mod writer;
 
 #[cfg(doctest)]
@@ -242,6 +243,7 @@ impl Driver for ClickhouseDriver {
             password: None,
             product_info: self.product_info.clone(),
             settings: HashMap::new(),
+            tls: tls::TlsOptions::default(),
         };
 
         for (key, value) in opts {
@@ -356,6 +358,7 @@ pub struct ClickhouseDatabase {
     password: Option<String>,
     product_info: ProductInfo,
     settings: HashMap<String, String>,
+    tls: tls::TlsOptions,
 }
 
 impl Database for ClickhouseDatabase {
@@ -369,6 +372,18 @@ impl Database for ClickhouseDatabase {
         &self,
         opts: impl IntoIterator<Item = (OptionConnection, OptionValue)>,
     ) -> adbc_core::error::Result<Self::ConnectionType> {
+        let opts: Vec<(OptionConnection, OptionValue)> = opts.into_iter().collect();
+
+        // The TLS transport is fixed when the HTTP client is built, so assemble it now from the
+        // database-level defaults plus any per-connection overrides.
+        let mut tls = self.tls.clone();
+        for (key, value) in opts.iter().filter_map(|(key, value)| match key {
+            OptionConnection::Other(s) if tls::is_tls_option(s) => Some((s, value)),
+            _ => None,
+        }) {
+            tls.try_set(key, value.clone().try_string(key)?)?;
+        }
+
         let tokio = self
             .tokio
             .clone()
@@ -380,7 +395,32 @@ impl Database for ClickhouseDatabase {
         // It's better to create a new `Client` for each connection because it may error or deadlock
         // if it tries to hop runtimes in the current-thread case.
         // TODO: configure the HTTP client to pool only a single connection (necessary?)
-        let mut client = Client::default()
+        //
+        // When TLS options were set we substitute a `hyper-rustls` transport carrying our custom
+        // `rustls::ClientConfig` for the default one; otherwise fall back to `Client::default()`.
+        let client = {
+            #[cfg(feature = "_tls-mtls")]
+            {
+                if tls.is_empty() {
+                    Client::default()
+                } else {
+                    tls.require_https(self.url.as_ref().map(Url::scheme))?;
+                    let connector = tls.build_https_connector()?;
+                    let http = hyper_util::client::legacy::Client::builder(
+                        hyper_util::rt::TokioExecutor::new(),
+                    )
+                    .pool_timer(hyper_util::rt::TokioTimer::new())
+                    .pool_idle_timeout(std::time::Duration::from_secs(2))
+                    .build(connector);
+                    Client::with_http_client(http)
+                }
+            }
+            #[cfg(not(feature = "_tls-mtls"))]
+            {
+                Client::default()
+            }
+        };
+        let mut client = client
             // Default `product_info` that should always be included
             // Note: we don't apply `self.product_info` at this level in case it's set
             // to a different value at a lower level; `AugmentedClient` covers that.
@@ -407,9 +447,17 @@ impl Database for ClickhouseDatabase {
 
         drop(tokio_guard);
 
-        let mut connection = ClickhouseConnection { client, tokio };
+        let mut connection = ClickhouseConnection { client, tokio, tls };
 
         for (key, value) in opts {
+            // TLS options were already applied above; the transport is immutable after creation.
+            let tls_option = match &key {
+                OptionConnection::Other(s) => tls::is_tls_option(s),
+                _ => false,
+            };
+            if tls_option {
+                continue;
+            }
             connection.set_option(key, value)?;
         }
 
@@ -583,6 +631,9 @@ impl ClickhouseDatabase {
             options::PRODUCT_INFO => {
                 self.product_info = value.try_into()?;
             }
+            other if tls::is_tls_option(other) => {
+                self.tls.try_set(other, value.try_string(other)?)?;
+            }
             other => {
                 return Err(Error::with_message_and_status(
                     format!("unknown database option {other:?}"),
@@ -605,6 +656,7 @@ impl ClickhouseDatabase {
 
         match key {
             options::PRODUCT_INFO => Ok(self.product_info.to_string()),
+            other if tls::is_tls_option(other) => self.tls.read_back(other),
             other => Err(Error::with_message_and_status(
                 format!("unknown database option {other:?}"),
                 Status::InvalidArguments,
@@ -648,6 +700,7 @@ impl ClickhouseDatabase {
 pub struct ClickhouseConnection {
     client: AugmentedClient,
     tokio: TokioContext,
+    tls: tls::TlsOptions,
 }
 
 impl Connection for ClickhouseConnection {
@@ -844,6 +897,15 @@ impl ClickhouseConnection {
             return Ok(());
         }
 
+        if tls::is_tls_option(key) {
+            return Err(Error::with_message_and_status(
+                "TLS options can only be set on the database or when creating the \
+                 connection (via `Database::new_connection_with_opts`); \
+                 the transport cannot be changed after the connection exists",
+                Status::InvalidArguments,
+            ));
+        }
+
         match key {
             options::PRODUCT_INFO => {
                 self.client.set_product_info(&value.try_into()?);
@@ -884,6 +946,7 @@ impl ClickhouseConnection {
                 .get_option(options::as_setting::SESSION_ID)
                 .unwrap_or("")
                 .into()),
+            other if tls::is_tls_option(other) => self.tls.read_back(other),
             other => Err(Error::with_message_and_status(
                 format!("unknown connection option {other:?}"),
                 Status::InvalidArguments,
@@ -1073,6 +1136,161 @@ mod tests {
     use adbc_core::options::{OptionConnection, OptionDatabase, OptionValue};
     use adbc_core::{Connection, Database, Driver, Optionable};
     use url::Url;
+
+    #[cfg(feature = "_tls-mtls")]
+    fn database_declaring_tls(uri: Option<&str>, identity: bool) -> crate::ClickhouseDatabase {
+        use crate::tls::tests::{CA_PEM, CLIENT_CERT_PEM, CLIENT_KEY_PEM};
+
+        let mut opts = Vec::<(OptionDatabase, OptionValue)>::new();
+        if let Some(uri) = uri {
+            opts.push((OptionDatabase::Uri, uri.into()));
+        }
+        if identity {
+            opts.push((options::TLS_CLIENT_CERT.into(), CLIENT_CERT_PEM.into()));
+            opts.push((options::TLS_CLIENT_KEY.into(), CLIENT_KEY_PEM.into()));
+        } else {
+            opts.push((options::TLS_ROOT_CERTS.into(), CA_PEM.into()));
+        }
+        ClickhouseDriver::init()
+            .new_database_with_opts(opts)
+            .unwrap()
+    }
+
+    #[cfg(feature = "_tls-mtls")]
+    #[test]
+    fn a_declared_tls_setting_is_refused_on_an_http_uri() {
+        for (uri, identity, setting) in [
+            (Some("http://127.0.0.1:1"), false, options::TLS_ROOT_CERTS),
+            (Some("http://127.0.0.1:1"), true, options::TLS_CLIENT_CERT),
+            (None, false, options::TLS_ROOT_CERTS),
+        ] {
+            let db = database_declaring_tls(uri, identity);
+
+            let Err(err) = db.new_connection() else {
+                panic!("{setting} declared with URI {uri:?} should be refused");
+            };
+
+            assert_eq!(err.status, Status::InvalidArguments, "{err:?}");
+            assert!(err.message.contains("requires an https URI"), "{err:?}");
+            assert!(err.message.contains(setting), "{err:?}");
+        }
+    }
+
+    #[cfg(feature = "_tls-mtls")]
+    #[test]
+    fn a_declared_tls_root_on_an_https_uri_reaches_the_dial() {
+        use adbc_core::Statement as _;
+
+        let db = database_declaring_tls(Some("https://127.0.0.1:1"), false);
+
+        let mut conn = db.new_connection().unwrap();
+
+        let mut statement = conn.new_statement().unwrap();
+        statement.set_sql_query("SELECT 1").unwrap();
+
+        // Nothing listens on port 1, so the query fails at the connection, not at the option check.
+        let Err(err) = statement.execute() else {
+            panic!("nothing listens on port 1, so no query should be answered");
+        };
+
+        assert!(!err.message.contains("requires an https URI"), "{err:?}");
+        assert_ne!(err.status, Status::InvalidArguments, "{err:?}");
+    }
+
+    #[cfg(feature = "_tls-mtls")]
+    #[test]
+    fn a_custom_tls_connection_answers_and_retires_its_idle_socket() {
+        use adbc_core::Statement as _;
+        use std::io::{self, Read, Write};
+        use std::net::TcpListener;
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        let pair = rcgen::generate_simple_self_signed([String::from("127.0.0.1")]).unwrap();
+        let root = pair.cert.pem();
+        #[cfg(feature = "rustls-tls-aws-lc")]
+        let provider = rustls::crypto::aws_lc_rs::default_provider();
+        #[cfg(all(feature = "rustls-tls-ring", not(feature = "rustls-tls-aws-lc")))]
+        let provider = rustls::crypto::ring::default_provider();
+        let server = rustls::ServerConfig::builder_with_provider(Arc::new(provider))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![pair.cert.der().clone()],
+                rustls::pki_types::PrivatePkcs8KeyDer::from(pair.signing_key.serialize_der())
+                    .into(),
+            )
+            .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let peer = std::thread::spawn(move || -> io::Result<()> {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let socket = loop {
+                match listener.accept() {
+                    Ok((socket, _)) => break socket,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            return Err(io::ErrorKind::TimedOut.into());
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => return Err(error),
+                }
+            };
+            socket.set_read_timeout(Some(Duration::from_secs(8)))?;
+            socket.set_write_timeout(Some(Duration::from_secs(6)))?;
+            let connection = rustls::ServerConnection::new(Arc::new(server)).unwrap();
+            let mut tls = rustls::StreamOwned::new(connection, socket);
+            let mut headers = Vec::new();
+            while !headers.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                tls.read_exact(&mut byte)?;
+                headers.push(byte[0]);
+                if headers.len() > 16 * 1024 {
+                    return Err(io::ErrorKind::InvalidData.into());
+                }
+            }
+            let mut query = [0; 8];
+            tls.read_exact(&mut query)?;
+            if &query != b"SELECT 1" {
+                return Err(io::ErrorKind::InvalidData.into());
+            }
+            tls.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")?;
+            tls.flush()?;
+            // The 8s read deadline leaves room for the client's 2s idle eviction.
+            match tls.read(&mut [0]) {
+                Ok(0) => Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(()),
+                Err(error) => Err(error),
+                Ok(_) => Err(io::ErrorKind::InvalidData.into()),
+            }
+        });
+        let runtime = Arc::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_all()
+                .build()
+                .unwrap(),
+        );
+        let database = ClickhouseDriver::init_with(runtime)
+            .new_database_with_opts([
+                (OptionDatabase::Uri, format!("https://{address}").into()),
+                (options::TLS_ROOT_CERTS.into(), root.into()),
+            ])
+            .unwrap();
+        let mut connection = database.new_connection().unwrap();
+        let mut statement = connection.new_statement().unwrap();
+        statement.set_sql_query("SELECT 1").unwrap();
+        let result = statement.execute_update();
+        let closed = peer.join().unwrap();
+        assert!(result.is_ok(), "custom TLS request failed: {result:?}");
+        assert!(
+            closed.is_ok(),
+            "idle TLS socket was not retired: {closed:?}"
+        );
+    }
 
     #[test]
     fn test_set_product_info() {
