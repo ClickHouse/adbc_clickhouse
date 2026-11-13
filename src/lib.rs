@@ -409,6 +409,8 @@ impl Database for ClickhouseDatabase {
                     let http = hyper_util::client::legacy::Client::builder(
                         hyper_util::rt::TokioExecutor::new(),
                     )
+                    .pool_timer(hyper_util::rt::TokioTimer::new())
+                    .pool_idle_timeout(std::time::Duration::from_secs(2))
                     .build(connector);
                     Client::with_http_client(http)
                 }
@@ -1193,6 +1195,101 @@ mod tests {
 
         assert!(!err.message.contains("requires an https URI"), "{err:?}");
         assert_ne!(err.status, Status::InvalidArguments, "{err:?}");
+    }
+
+    #[cfg(feature = "_tls-mtls")]
+    #[test]
+    fn a_custom_tls_connection_answers_and_retires_its_idle_socket() {
+        use adbc_core::Statement as _;
+        use std::io::{self, Read, Write};
+        use std::net::TcpListener;
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        let pair = rcgen::generate_simple_self_signed([String::from("127.0.0.1")]).unwrap();
+        let root = pair.cert.pem();
+        #[cfg(feature = "rustls-tls-aws-lc")]
+        let provider = rustls::crypto::aws_lc_rs::default_provider();
+        #[cfg(all(feature = "rustls-tls-ring", not(feature = "rustls-tls-aws-lc")))]
+        let provider = rustls::crypto::ring::default_provider();
+        let server = rustls::ServerConfig::builder_with_provider(Arc::new(provider))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![pair.cert.der().clone()],
+                rustls::pki_types::PrivatePkcs8KeyDer::from(pair.signing_key.serialize_der())
+                    .into(),
+            )
+            .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let peer = std::thread::spawn(move || -> io::Result<()> {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let socket = loop {
+                match listener.accept() {
+                    Ok((socket, _)) => break socket,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            return Err(io::ErrorKind::TimedOut.into());
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => return Err(error),
+                }
+            };
+            socket.set_read_timeout(Some(Duration::from_secs(8)))?;
+            socket.set_write_timeout(Some(Duration::from_secs(6)))?;
+            let connection = rustls::ServerConnection::new(Arc::new(server)).unwrap();
+            let mut tls = rustls::StreamOwned::new(connection, socket);
+            let mut headers = Vec::new();
+            while !headers.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                tls.read_exact(&mut byte)?;
+                headers.push(byte[0]);
+                if headers.len() > 16 * 1024 {
+                    return Err(io::ErrorKind::InvalidData.into());
+                }
+            }
+            let mut query = [0; 8];
+            tls.read_exact(&mut query)?;
+            if &query != b"SELECT 1" {
+                return Err(io::ErrorKind::InvalidData.into());
+            }
+            tls.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")?;
+            tls.flush()?;
+            // The 8s read deadline leaves room for the client's 2s idle eviction.
+            match tls.read(&mut [0]) {
+                Ok(0) => Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(()),
+                Err(error) => Err(error),
+                Ok(_) => Err(io::ErrorKind::InvalidData.into()),
+            }
+        });
+        let runtime = Arc::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_all()
+                .build()
+                .unwrap(),
+        );
+        let database = ClickhouseDriver::init_with(runtime)
+            .new_database_with_opts([
+                (OptionDatabase::Uri, format!("https://{address}").into()),
+                (options::TLS_ROOT_CERTS.into(), root.into()),
+            ])
+            .unwrap();
+        let mut connection = database.new_connection().unwrap();
+        let mut statement = connection.new_statement().unwrap();
+        statement.set_sql_query("SELECT 1").unwrap();
+        let result = statement.execute_update();
+        let closed = peer.join().unwrap();
+        assert!(result.is_ok(), "custom TLS request failed: {result:?}");
+        assert!(
+            closed.is_ok(),
+            "idle TLS socket was not retired: {closed:?}"
+        );
     }
 
     #[test]

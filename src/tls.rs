@@ -219,7 +219,9 @@ impl TlsOptions {
             builder.with_no_client_auth()
         };
 
-        let http = HttpConnector::new();
+        let mut http = HttpConnector::new();
+        http.enforce_http(false);
+        http.set_keepalive(Some(std::time::Duration::from_secs(60)));
         Ok(HttpsConnectorBuilder::new()
             .with_tls_config(config)
             .https_or_http()

@@ -115,6 +115,7 @@ name = "it"
 path = "tests/it/main.rs"
 
 [dev-dependencies]
+rcgen = { version = "0.14", default-features = false, features = ["pem", "ring"] }
 arrow = "58.3.0"
 adbc_driver_manager = "0.23.0"
 
