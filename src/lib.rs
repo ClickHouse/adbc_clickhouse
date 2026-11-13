@@ -801,21 +801,39 @@ impl Optionable for ClickhouseConnection {
                         Status::NotFound,
                     )
                 }),
+            // ClickHouse has no transactions, so every statement commits as it runs.
+            // Driver managers read this back before using a connection.
+            OptionConnection::AutoCommit => Ok("true".into()),
+            // ClickHouse has no catalog level above the database (an ADBC schema),
+            // so the catalog is always empty rather than unsupported.
+            OptionConnection::CurrentCatalog => Ok(String::new()),
             OptionConnection::Other(s) => self.get_custom_option(&s),
-            other => err_unimplemented!("ClickhouseConnection::get_option_string({other:?})"),
+            other => Err(Error::with_message_and_status(
+                format!("unimplemented connection option: {:?}", other.as_ref()),
+                Status::NotImplemented,
+            )),
         }
     }
 
     fn get_option_bytes(&self, key: Self::Option) -> adbc_core::error::Result<Vec<u8>> {
-        err_unimplemented!("ClickhouseConnection::get_option_bytes({key:?})")
+        // There's no options that are specifically binary-only, so... *shrug*
+        self.get_option_string(key).map(String::into_bytes)
     }
 
     fn get_option_int(&self, key: Self::Option) -> adbc_core::error::Result<i64> {
-        err_unimplemented!("ClickhouseConnection::get_option_int({key:?})")
+        // Currently no connection options that can be integers
+        Err(Error::with_message_and_status(
+            format!("option {:?} is not an integer", key.as_ref()),
+            Status::InvalidArguments,
+        ))
     }
 
     fn get_option_double(&self, key: Self::Option) -> adbc_core::error::Result<f64> {
-        err_unimplemented!("ClickhouseConnection::get_option_double({key:?})")
+        // Currently no connection options that can be doubles
+        Err(Error::with_message_and_status(
+            format!("option {:?} is not a double", key.as_ref()),
+            Status::InvalidArguments,
+        ))
     }
 }
 
