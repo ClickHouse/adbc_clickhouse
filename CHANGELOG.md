@@ -8,17 +8,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-* Implemented `Connection::get_info()` for driver/vendor metadata ([#9]).
+* Implemented `Connection::get_option_string()` for `OptionConnection::AutoCommit`
+  (always `"true"`, as ClickHouse has no transactions) and `OptionConnection::CurrentCatalog`
+  (always empty, as ClickHouse has no catalog level above the database). ([#65])
+* Implemented `Connection::get_info()` for driver/vendor metadata ([#69]).
 
-[#9]: https://github.com/ClickHouse/adbc_clickhouse/issues/9
+[#65]: https://github.com/ClickHouse/adbc_clickhouse/pull/65
+[#69]: https://github.com/ClickHouse/adbc_clickhouse/pull/69
+
+## [0.1.2] - 2026-11-06
+
+### Fixed
+
+* Changed `Connection::get_table_schema()` to return `Decimal128` for all decimal types to match server behavior. ([#78])
+* Updated the `clickhouse` crate to 0.15.3. ([#86])
+  * Fixes `decompression error: incorrect magic number` against ClickHouse 26.9+
+    (upstream: [clickhouse-rs#468], fixed in [clickhouse-rs#482]). 
+
+[#78]: https://github.com/ClickHouse/adbc_clickhouse/pull/78
+[#86]: https://github.com/ClickHouse/adbc_clickhouse/issues/86
+[clickhouse-rs#468]: https://github.com/ClickHouse/clickhouse-rs/issues/468
+[clickhouse-rs#482]: https://github.com/ClickHouse/clickhouse-rs/pull/482
+
+## [0.1.1] - 2026-08-31
+
+### Added
+
 * Added `clickhouse.setting.<setting_name>` passthrough options for arbitrary
   [ClickHouse settings](https://clickhouse.com/docs/operations/settings/settings)
-  (e.g. `clickhouse.setting.mutations_sync`). Settable on `ClickhouseDatabase`,
-  `ClickhouseConnection` and `ClickhouseStatement`; values propagate to newly created objects
-  lower in the hierarchy and lower levels override; read back with `get_option_string()`. ([#70])
+  (e.g. `clickhouse.setting.mutations_sync`). ([#70])
+  * Settable on `ClickhouseDatabase`, `ClickhouseConnection` and `ClickhouseStatement`
+  * Values propagate to newly created objects lower in the hierarchy and lower levels override.
+  * Read back with `get_option_string()`. 
 * Query parameters in the connection URI (other than `protocol` and `database`) are now treated
-  as ClickHouse settings (e.g. `http://localhost:8123?mutations_sync=3`). Previously they were
-  silently dropped. ([#70])
+  as ClickHouse settings (e.g. `http://localhost:8123?mutations_sync=3`). ([#70])
+  * Previously they were silently dropped.
 * Added read-back of `clickhouse.client.session_id` via `Connection::get_option_string()`,
   as was already documented. ([#70])
 * Added support for configuring the default database of a connection. ([#67])
@@ -34,10 +58,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-* SQL queries are now sent to the server verbatim: a literal `?` is no longer treated as a
-  client-side bind placeholder (and `??` is no longer unescaped). Use server-side
-  query parameters (`{name: Type}`) with `Statement::bind()` instead, which was already
-  the only supported binding mechanism. ([#53])
+* SQL queries are now sent to the server verbatim. ([#53])
+  * A literal `?` is no longer treated as a client-side bind placeholder (and `??` is no longer unescaped). 
+  * Use server-side query parameters (`{name: Type}`) with `Statement::bind()` instead, which was already
+    the only supported binding mechanism. 
 * Updated `clickhouse` to `0.15.2`.
 
 [#53]: https://github.com/ClickHouse/adbc_clickhouse/issues/53
@@ -98,6 +122,8 @@ However, the core query flow is supported:
 * Binding a statement in streaming insert mode with `Statement::bind_stream()`
 * Executing a statement with `Statement::execute()` or `Statement::execute_update()`
 
-
-[0.1.0]: https://github.com/ClickHouse/clickhouse-rs/compare/v0.1.0-alpha.1...v0.1.0
+[Unreleased]: https://github.com/ClickHouse/adbc_clickhouse/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/ClickHouse/adbc_clickhouse/compare/v0.1.1...0.1.2
+[0.1.1]: https://github.com/ClickHouse/adbc_clickhouse/compare/v0.1.0...0.1.1
+[0.1.0]: https://github.com/ClickHouse/adbc_clickhouse/compare/v0.1.0-alpha.1...v0.1.0
 [0.1.0-alpha.1]: https://github.com/ClickHouse/adbc_clickhouse/releases/tag/v0.1.0-alpha.1
