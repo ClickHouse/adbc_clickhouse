@@ -329,6 +329,48 @@ fn execute_handles_no_result_set_statements() {
 }
 
 #[test]
+fn prepare_is_a_no_op() {
+    // Regression test for https://github.com/ClickHouse/adbc_clickhouse/issues/19:
+    // the Python DB-API `Cursor.executemany()` calls `prepare()` without handling
+    // `NotImplemented`, so `prepare()` must succeed and leave the statement executable.
+    let db = test_database();
+    let mut conn = db.new_connection().unwrap();
+
+    let mut create_table = conn.new_statement().unwrap();
+    create_table
+        .set_sql_query("CREATE TEMPORARY TABLE issue_19(id Int32) ENGINE = MergeTree ORDER BY id")
+        .unwrap();
+    create_table.execute_update().unwrap();
+
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+    let mut insert = conn.new_statement().unwrap();
+    insert
+        .set_sql_query("INSERT INTO issue_19(id) FORMAT ArrowStream")
+        .unwrap();
+    insert.prepare().unwrap();
+
+    for ids in [create_array!(Int32, [1, 2]), create_array!(Int32, [3, 4])] {
+        let batch = RecordBatch::try_new(schema.clone(), vec![ids]).unwrap();
+        insert.bind(batch).unwrap();
+        insert.execute_update().unwrap();
+    }
+
+    let mut select = conn.new_statement().unwrap();
+    select
+        .set_sql_query("SELECT id FROM issue_19 ORDER BY id")
+        .unwrap();
+    select.prepare().unwrap();
+    let reader = select.execute().unwrap();
+    let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+    let joined = arrow::compute::concat_batches(&schema, &batches).unwrap();
+
+    let expected = RecordBatch::try_new(schema, vec![create_array!(Int32, [1, 2, 3, 4])]).unwrap();
+
+    assert_eq!(joined, expected);
+}
+
+#[test]
 fn connection_option_getters() {
     let db = test_database();
     let conn = db.new_connection().unwrap();
