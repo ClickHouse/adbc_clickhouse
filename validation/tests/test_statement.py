@@ -51,7 +51,9 @@ class TestStatement(Base):
                     raise
 
             quoted_name = driver.quote_identifier(table_name)
-            cursor.adbc_statement.set_sql_query(f"CREATE TABLE {quoted_name} (id INT)")
+            cursor.adbc_statement.set_sql_query(
+                f"CREATE TABLE {quoted_name} (id INT) ENGINE = MergeTree ORDER BY id"
+            )
             rows_affected = cursor.adbc_statement.execute_update()
 
             if (
