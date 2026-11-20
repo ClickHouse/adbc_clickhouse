@@ -57,6 +57,12 @@ When making claims about library behavior:
 
 - `ClickHouse/adbc_clickhouse` on GitHub. Use the `gh` CLI: `gh issue view <n>`, `gh api repos/ClickHouse/adbc_clickhouse/issues/comments/<id>`.
 
+## Issue triage
+
+- To set, check, or explain the Priority of an issue, follow [`.claude/skills/issue-priority/SKILL.md`](.claude/skills/issue-priority/SKILL.md). It is the single source of truth for the priority rules.
+- To classify an issue (its impacts and its area), follow [`.claude/skills/issue-classification/SKILL.md`](.claude/skills/issue-classification/SKILL.md).
+- A vulnerability that is not public yet goes into a private security report (**Security** → **Report a vulnerability**), never into an issue or a pull request. The classification skill defines such a vulnerability, and the priority skill says how to handle the public issue.
+
 ## Recent context
 
 - Issue #49: `Statement::execute()` used to error on DDL/DML (`Schema error: response stream ended before receiving Schema`) because ClickHouse omits the Arrow IPC schema header for no-result statements. Fixed by returning an empty `RecordBatchReader` (`Schema::empty().into()`, no batches) from `ArrowStreamReader::begin()` instead of erroring. See `description.md` in the repo root for the PR description draft.
