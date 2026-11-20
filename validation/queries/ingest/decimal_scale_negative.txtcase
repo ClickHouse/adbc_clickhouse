@@ -1,0 +1,4 @@
+// part: metadata
+
+[tags]
+broken-vendor = "ClickHouse doesn't support negative decimal scales"

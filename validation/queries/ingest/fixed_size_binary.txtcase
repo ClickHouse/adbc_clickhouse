@@ -1,0 +1,17 @@
+// part: expected_schema
+
+{
+    "format": "+s",
+    "children": [
+        {
+            "name": "idx",
+            "format": "l",
+            "flags": ["nullable"]
+        },
+        {
+            "name": "value",
+            "format": "w:15",
+            "flags": ["nullable"]
+        }
+    ]
+}

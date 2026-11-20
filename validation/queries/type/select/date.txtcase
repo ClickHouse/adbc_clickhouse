@@ -1,0 +1,40 @@
+// Copyright (c) 2026 ADBC Drivers Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//         http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// part: metadata
+
+[tags]
+caveats = ["Date32 has limited range (1900-01-01 to 2299-12-31)"]
+sql-type-name = "Date32"
+
+// part: setup_query
+
+CREATE TABLE test_date (
+    idx Int32,
+    res Nullable(Date32)
+) ENGINE = MergeTree() ORDER BY idx;
+
+INSERT INTO test_date (idx, res) VALUES (1, '2023-05-15');
+INSERT INTO test_date (idx, res) VALUES (2, '1900-01-01');
+INSERT INTO test_date (idx, res) VALUES (3, '1969-07-20');
+INSERT INTO test_date (idx, res) VALUES (4, '2299-12-31');
+INSERT INTO test_date (idx, res) VALUES (5, NULL);
+
+// part: expected
+
+{"res": 19492}
+{"res": -25567}
+{"res": -165}
+{"res": 120529}
+{"res": null}

@@ -1,0 +1,8 @@
+// part: metadata
+
+[tags]
+broken-driver = "Float16 parameters are not supported"
+
+// part: bind_query
+
+SELECT {res:Nullable(Float32)} AS res
