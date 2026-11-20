@@ -1,3 +1,28 @@
+# Communication style
+
+- Follow ASD-STE100
+
+# Pull requests
+
+## CHANGELOG
+
+- **Do not** edit `CHANGELOG.md`. Parallel pull requests that edit this file conflict.
+- Write the CHANGELOG entry in the pull request description.
+- Write one short sentence if possible. Tell what changes for the user.
+- Put the entry under a section name that `CHANGELOG.md` uses: `Breaking`, `Added`, `Changed` or `Fixed`.
+- End the entry with a link to the pull request, not to the issue. If you do not know the pull request number yet, open the pull request first, then update the description.
+- If the change has no effect on users (for example tests, CI or refactoring), write "No CHANGELOG entry".
+
+Example:
+
+~~~md
+### Fixed
+
+* Changed `Connection::get_table_schema()` to return `Decimal128` for all decimal types to match server behavior. ([#78])
+
+[#78]: https://github.com/ClickHouse/adbc_clickhouse/pull/78
+~~~
+
 # Agent context
 
 A primer for AI agents working on this repository. Read this before doing substantive work. **Update this file when a conversation surfaces a new architectural fact, library quirk, repo convention, or validation source worth preserving for future chats.**
