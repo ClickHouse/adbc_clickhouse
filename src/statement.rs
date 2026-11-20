@@ -278,13 +278,13 @@ impl Statement for ClickhouseStatement {
         err_unimplemented!("ClickhouseStatement::get_parameter_schema()")
     }
 
-    /// # Not Implemented
-    /// Currently will return an error with [`Status::NotImplemented`].
+    /// No-op: the ClickHouse HTTP interface has no server-side prepared statements.
     ///
-    /// See the tracking issue for details and subscribe for updates:
-    /// <https://github.com/ClickHouse/adbc_clickhouse/issues/19>
+    /// The SQL query is sent to the server on every execution. This method only exists
+    /// so that clients that always call `prepare()`, such as `Cursor.executemany()`
+    /// in the Python DB-API, can execute statements.
     fn prepare(&mut self) -> adbc_core::error::Result<()> {
-        err_unimplemented!("ClickhouseStatement::prepare()")
+        Ok(())
     }
 
     /// Set the SQL for this [`Statement`].
