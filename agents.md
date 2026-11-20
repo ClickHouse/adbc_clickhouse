@@ -68,6 +68,7 @@ When making claims about library behavior:
 - The suite's bind tests use `$1`-style placeholders and fields named `"0"`, `"1"`. ClickHouse query parameter names must be identifiers (`{0:Int32}` is a server syntax error), so the harness uses `statement_bind_test_mode="select"` (one bound row per execution, which is all a non-insert query accepts) and overrides each `type/bind/*` case's `bind_query` with `SELECT {res:Nullable(T)} AS res`.
 - ClickHouse's `ArrowStream` output attaches the server time zone to `DateTime64` without one; `get_table_schema()` doesn't (no tz), so the two disagree for those columns.
 - The suite's `metadata_type_name` switch covers both query results and `get_table_schema()`. This driver sets `CLICKHOUSE:type` only on the latter, so `validation/tests/test_query.py` skips that check for `get_table_schema()`.
+- The driver only implements `append` ingest, but every upstream ingest test starts with `create`, so `validation/tests/test_ingest.py` adds `test_append_existing_table*`, which create the table with SQL first.
 - The Foundry build repo `adbc-drivers/clickhouse` has its own copy of the quirks (`src/validation/`) that runs only when its submodule is bumped; it drifts from this repo's behavior.
 
 ## Downstream: how dbt-fusion loads this driver

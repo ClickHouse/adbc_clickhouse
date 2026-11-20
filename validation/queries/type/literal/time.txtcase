@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// part: query
-
-SELECT CAST('13:45:31' AS TIME) AS res
-
 // part: metadata
 
 [tags]
-broken-vendor = "ClickHouse Time type is not supported in Arrow format export"
-sql-type-name = "Time"
+sql-type-name = "Time64(6)"
+
+// part: query
+
+SELECT CAST('13:45:31.123456' AS Nullable(Time64(6))) AS res

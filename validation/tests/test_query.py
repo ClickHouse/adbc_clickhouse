@@ -31,20 +31,20 @@ class _UncheckedTypeNameQuirks(clickhouse.ClickHouseQuirks):
         return "CLICKHOUSE:unchecked"
 
 
-# `DateTime64` columns without an explicit time zone
-_NAIVE_TIMESTAMP_CASES = {f"type/select/timestamp{p}" for p in range(10)}
+_GET_TABLE_SCHEMA_XFAILS = {
+    **{
+        f"type/select/timestamp{p}": "get_table_schema() omits the server time zone "
+        "that query results carry for `DateTime64` without a time zone"
+        for p in range(10)
+    },
+    "type/select/time": "get_table_schema() doesn't map `Time64` to Arrow",
+}
 
 
 class TestQuery(Base):
     def test_get_table_schema(self, request, driver, conn, query, query_setup) -> None:
-        if query.name in _NAIVE_TIMESTAMP_CASES:
-            request.applymarker(
-                pytest.mark.xfail(
-                    reason="get_table_schema() omits the server time zone that "
-                    "query results carry for `DateTime64` without a time zone",
-                    strict=True,
-                )
-            )
+        if reason := _GET_TABLE_SCHEMA_XFAILS.get(query.name):
+            request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
         # `get_table_schema()` sets `CLICKHOUSE:type`, but query results don't, and the
         # suite has one switch (`metadata_type_name`) for both. Don't check the type name.
         super().test_get_table_schema(
