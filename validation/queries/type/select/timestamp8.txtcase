@@ -1,0 +1,55 @@
+// Copyright (c) 2026 ADBC Drivers Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//         http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// part: metadata
+
+[tags]
+caveats = ["DateTime64 supports dates through 2299, but Arrow nanosecond timestamps end in 2262"]
+sql-type-name = "DateTime64(8)"
+
+// part: setup_query
+
+CREATE TABLE test_timestamp (
+    idx Int32,
+    res Nullable(DateTime64(8))
+) ENGINE = MergeTree() ORDER BY idx;
+
+INSERT INTO test_timestamp (idx, res) VALUES (1, '2023-05-15 13:45:30.12345678');
+INSERT INTO test_timestamp (idx, res) VALUES (2, '2000-01-01 00:00:00.23456789');
+INSERT INTO test_timestamp (idx, res) VALUES (3, '1969-07-20 20:17:40.34567890');
+INSERT INTO test_timestamp (idx, res) VALUES (4, '1900-01-01 00:00:00.00000000');
+INSERT INTO test_timestamp (idx, res) VALUES (5, '2262-04-11 23:47:16.85');
+INSERT INTO test_timestamp (idx, res) VALUES (6, NULL);
+
+// part: expected_schema
+
+{
+    "format": "+s",
+    "children": [
+        {
+            "name": "res",
+            "format": "tsn:UTC",
+            "flags": ["nullable"]
+        }
+    ]
+}
+
+// part: expected
+
+{"res": 1684158330123456780}
+{"res": 946684800234567890}
+{"res": -14182939654321100}
+{"res": -2208988800000000000}
+{"res": 9223372036850000000}
+{"res": null}

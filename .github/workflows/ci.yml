@@ -136,6 +136,33 @@ jobs:
       #     slug: ClickHouse/adbc_clickhouse
       #     fail_ci_if_error: true
 
+  # https://github.com/adbc-drivers/validation, loading the driver through the C API
+  validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start ClickHouse in Docker
+        uses: hoverkraft-tech/compose-action@v2.2.0
+        with:
+          compose-file: docker-compose.yml
+          down-flags: --volumes
+
+      - run: rustup show active-toolchain -v
+      - run: cargo build --features ffi
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Run validation suite
+        working-directory: validation
+        run: uv run --locked pytest -rfEX --junit-xml=validation-report.xml tests/
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: validation-report
+          path: validation/validation-report.xml
+
   miri:
     needs: build
     runs-on: ubuntu-latest

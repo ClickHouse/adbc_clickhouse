@@ -1,0 +1,16 @@
+// part: bind_query
+
+SELECT {res:Nullable(FixedString(15))} AS res
+
+// part: expected_schema
+
+{
+    "format": "+s",
+    "children": [
+        {
+            "name": "res",
+            "format": "w:15",
+            "flags": ["nullable"]
+        }
+    ]
+}
