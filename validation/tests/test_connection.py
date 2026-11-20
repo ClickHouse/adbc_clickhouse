@@ -35,11 +35,3 @@ class TestConnection(Base):
         Base.test_get_table_schema_not_found,
         "returns INTERNAL instead of NOT_FOUND for a table that doesn't exist",
     )
-
-    # The failures are in subtests, which pytest reports apart from the test itself,
-    # so this XPASSes. https://github.com/ClickHouse/adbc_clickhouse/issues/100
-    test_unknown_option = xfail(
-        Base.test_unknown_option,
-        "an unknown option fails with INVALID_ARGUMENT or NOT_IMPLEMENTED, not NOT_FOUND",
-        strict=False,
-    )
