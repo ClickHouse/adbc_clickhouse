@@ -485,7 +485,9 @@ impl Optionable for ClickhouseDatabase {
     }
 
     fn get_option_int(&self, key: Self::Option) -> adbc_core::error::Result<i64> {
-        // Currently no database options that can be integers
+        // Currently no database options that can be integers;
+        // reading as a string surfaces `NotFound` / `NotImplemented` for keys without a value.
+        self.get_option_string(key.clone())?;
         Err(Error::with_message_and_status(
             format!("option {:?} is not an integer", key.as_ref()),
             Status::InvalidArguments,
@@ -493,7 +495,9 @@ impl Optionable for ClickhouseDatabase {
     }
 
     fn get_option_double(&self, key: Self::Option) -> adbc_core::error::Result<f64> {
-        // Currently no database options that can be doubles
+        // Currently no database options that can be doubles;
+        // reading as a string surfaces `NotFound` / `NotImplemented` for keys without a value.
+        self.get_option_string(key.clone())?;
         Err(Error::with_message_and_status(
             format!("option {:?} is not a double", key.as_ref()),
             Status::InvalidArguments,
@@ -580,13 +584,19 @@ impl ClickhouseDatabase {
         }
 
         match key {
+            options::SETTING_PREFIX => {
+                return Err(Error::with_message_and_status(
+                    "setting name cannot be empty",
+                    Status::InvalidArguments,
+                ));
+            }
             options::PRODUCT_INFO => {
                 self.product_info = value.try_into()?;
             }
             other => {
                 return Err(Error::with_message_and_status(
                     format!("unknown database option {other:?}"),
-                    Status::InvalidArguments,
+                    Status::NotImplemented,
                 ));
             }
         }
@@ -607,7 +617,7 @@ impl ClickhouseDatabase {
             options::PRODUCT_INFO => Ok(self.product_info.to_string()),
             other => Err(Error::with_message_and_status(
                 format!("unknown database option {other:?}"),
-                Status::InvalidArguments,
+                Status::NotFound,
             )),
         }
     }
@@ -821,7 +831,9 @@ impl Optionable for ClickhouseConnection {
     }
 
     fn get_option_int(&self, key: Self::Option) -> adbc_core::error::Result<i64> {
-        // Currently no connection options that can be integers
+        // Currently no connection options that can be integers;
+        // reading as a string surfaces `NotFound` / `NotImplemented` for keys without a value.
+        self.get_option_string(key.clone())?;
         Err(Error::with_message_and_status(
             format!("option {:?} is not an integer", key.as_ref()),
             Status::InvalidArguments,
@@ -829,7 +841,9 @@ impl Optionable for ClickhouseConnection {
     }
 
     fn get_option_double(&self, key: Self::Option) -> adbc_core::error::Result<f64> {
-        // Currently no connection options that can be doubles
+        // Currently no connection options that can be doubles;
+        // reading as a string surfaces `NotFound` / `NotImplemented` for keys without a value.
+        self.get_option_string(key.clone())?;
         Err(Error::with_message_and_status(
             format!("option {:?} is not a double", key.as_ref()),
             Status::InvalidArguments,
@@ -845,6 +859,12 @@ impl ClickhouseConnection {
         }
 
         match key {
+            options::SETTING_PREFIX => {
+                return Err(Error::with_message_and_status(
+                    "setting name cannot be empty",
+                    Status::InvalidArguments,
+                ));
+            }
             options::PRODUCT_INFO => {
                 self.client.set_product_info(&value.try_into()?);
             }
@@ -861,7 +881,7 @@ impl ClickhouseConnection {
             other => {
                 return Err(Error::with_message_and_status(
                     format!("unknown connection option {other:?}"),
-                    Status::InvalidArguments,
+                    Status::NotImplemented,
                 ));
             }
         }
@@ -886,7 +906,7 @@ impl ClickhouseConnection {
                 .into()),
             other => Err(Error::with_message_and_status(
                 format!("unknown connection option {other:?}"),
-                Status::InvalidArguments,
+                Status::NotFound,
             )),
         }
     }

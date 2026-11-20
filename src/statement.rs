@@ -349,7 +349,7 @@ impl Optionable for ClickhouseStatement {
     /// * [`OptionStatement::Other`]: ClickHouse-specific options listed in the
     ///   [`options`][crate::options] module. See that module for details.
     ///   Any custom option string not explicitly supported will return
-    ///   an error with [`Status::InvalidArguments`].
+    ///   an error with [`Status::NotImplemented`].
     ///
     /// # Unsupported [`OptionStatement`] Options
     ///
@@ -425,15 +425,24 @@ impl Optionable for ClickhouseStatement {
     }
 
     fn get_option_bytes(&self, key: Self::Option) -> adbc_core::error::Result<Vec<u8>> {
-        err_unimplemented!("ClickhouseStatement::get_option_bytes({key:?})")
+        self.get_option_string(key).map(String::into_bytes)
     }
 
     fn get_option_int(&self, key: Self::Option) -> adbc_core::error::Result<i64> {
-        err_unimplemented!("ClickhouseStatement::get_option_int({key:?})")
+        // Reading as a string surfaces `NotFound` / `NotImplemented` for keys without a value.
+        self.get_option_string(key.clone())?;
+        Err(Error::with_message_and_status(
+            format!("option {:?} is not an integer", key.as_ref()),
+            Status::InvalidArguments,
+        ))
     }
 
     fn get_option_double(&self, key: Self::Option) -> adbc_core::error::Result<f64> {
-        err_unimplemented!("ClickhouseStatement::get_option_double({key:?})")
+        self.get_option_string(key.clone())?;
+        Err(Error::with_message_and_status(
+            format!("option {:?} is not a double", key.as_ref()),
+            Status::InvalidArguments,
+        ))
     }
 }
 
@@ -466,6 +475,12 @@ impl ClickhouseStatement {
         }
 
         match key {
+            options::SETTING_PREFIX => {
+                return Err(Error::with_message_and_status(
+                    "setting name cannot be empty",
+                    Status::InvalidArguments,
+                ));
+            }
             options::PRODUCT_INFO => {
                 self.client.set_product_info(&value.try_into()?);
             }
@@ -486,7 +501,7 @@ impl ClickhouseStatement {
             other => {
                 return Err(Error::with_message_and_status(
                     format!("unexpected statement option {other:?}"),
-                    Status::InvalidArguments,
+                    Status::NotImplemented,
                 ));
             }
         }
@@ -510,8 +525,8 @@ impl ClickhouseStatement {
                 .unwrap_or("")
                 .into()),
             other => Err(Error::with_message_and_status(
-                format!("unimplemented connection option: {other:?}"),
-                Status::NotImplemented,
+                format!("unknown statement option {other:?}"),
+                Status::NotFound,
             )),
         }
     }
