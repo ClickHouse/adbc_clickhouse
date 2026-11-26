@@ -410,6 +410,42 @@ fn connection_option_getters() {
 }
 
 #[test]
+fn unknown_option() {
+    fn check<O: Optionable>(obj: &mut O, key: impl Fn() -> O::Option) {
+        assert_eq!(
+            obj.get_option_string(key()).unwrap_err().status,
+            Status::NotFound
+        );
+        assert_eq!(
+            obj.get_option_bytes(key()).unwrap_err().status,
+            Status::NotFound
+        );
+        assert_eq!(
+            obj.get_option_int(key()).unwrap_err().status,
+            Status::NotFound
+        );
+        assert_eq!(
+            obj.get_option_double(key()).unwrap_err().status,
+            Status::NotFound
+        );
+        assert_eq!(
+            obj.set_option(key(), "x".into()).unwrap_err().status,
+            Status::NotImplemented
+        );
+    }
+
+    for name in ["foo.bar", "clickhouse.client.nope"] {
+        let mut db = test_database();
+        let mut conn = db.new_connection().unwrap();
+        let mut stmt = conn.new_statement().unwrap();
+
+        check(&mut db, || OptionDatabase::from(name));
+        check(&mut conn, || OptionConnection::from(name));
+        check(&mut stmt, || OptionStatement::from(name));
+    }
+}
+
+#[test]
 fn query_with_product_info() {
     // Note: may be `ManagedStatement` if using the `ffi` feature.
     fn query_user_agent_string(mut statement: impl Statement<Option = OptionStatement>) -> String {

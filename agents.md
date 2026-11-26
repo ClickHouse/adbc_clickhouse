@@ -32,6 +32,8 @@ A primer for AI agents working on this repository. Read this before doing substa
 - **`arrow-ipc::StreamDecoder::finish()` only inspects state, doesn't mutate it.** Safe to call multiple times. It also catches every partial-data / truncated-stream scenario with `IpcError("Unexpected End of Stream")`, so this driver doesn't need to re-validate that.
 - **`SchemaRef = Arc<Schema>`.** Existing codebase convention is `Schema::new(...).into()` / `Schema::empty().into()`, *not* `Arc::new(Schema::...)`. The `Arc::new` form is only used here for `Runtime` and `Client`.
 
+- **`adbc_ffi` buffers Database/Connection options before `Init`.** `driver_exporter.rs` `database_set_option_impl` / `connection_set_option_impl` store pre-init options in a map and return `OK` for any key (read-back comes from that map too); the driver only sees them when `Init` replays them through `set_option`, so pre-init validation errors surface at `AdbcDatabaseInit` / `AdbcConnectionInit`. Rust-API tests (`test_database()`) only exercise the post-init path.
+
 ## Related local repos worth referencing
 
 - `/Users/josemunoz/repos/clickhouse-rs` — the underlying ClickHouse client. Useful files: `src/response.rs` (HTTP error filtering), `src/cursors/*` (fused stream behavior), `src/query.rs` (`fetch_bytes` / `execute`).
