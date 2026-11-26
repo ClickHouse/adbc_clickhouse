@@ -1,0 +1,3 @@
+// part: bind_query
+
+SELECT {res:Nullable(Float64)} AS res

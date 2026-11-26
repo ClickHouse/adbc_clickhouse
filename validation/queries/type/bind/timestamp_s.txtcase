@@ -1,0 +1,23 @@
+// part: metadata
+
+sort-keys = [["res", "ascending"]]
+
+[tags]
+caveats = ["ClickHouse attaches the server time zone to `DateTime64` values without one"]
+
+// part: bind_query
+
+SELECT {res:Nullable(DateTime64(0))} AS res
+
+// part: expected_schema
+
+{
+    "format": "+s",
+    "children": [
+        {
+            "name": "res",
+            "format": "tss:UTC",
+            "flags": ["nullable"]
+        }
+    ]
+}

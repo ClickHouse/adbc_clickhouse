@@ -1,0 +1,22 @@
+// part: metadata
+
+[tags]
+caveats = ["ClickHouse attaches the server time zone to `DateTime64` values without one"]
+
+// part: expected_schema
+
+{
+    "format": "+s",
+    "children": [
+        {
+            "name": "idx",
+            "format": "l",
+            "flags": ["nullable"]
+        },
+        {
+            "name": "value",
+            "format": "tsm:UTC",
+            "flags": ["nullable"]
+        }
+    ]
+}

@@ -1,0 +1,8 @@
+// part: metadata
+
+[tags]
+broken-vendor = "ClickHouse has no binary type, and `output_format_arrow_string_as_string` (on by default) returns `String` as Arrow `Utf8`, so bytes that are not valid UTF-8 fail to decode"
+
+// part: bind_query
+
+SELECT {res:Nullable(String)} AS res

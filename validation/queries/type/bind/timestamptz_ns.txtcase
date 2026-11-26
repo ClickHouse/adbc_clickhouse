@@ -1,0 +1,7 @@
+// part: metadata
+
+sort-keys = [["res", "ascending"]]
+
+// part: bind_query
+
+SELECT {res:Nullable(DateTime64(9, 'UTC'))} AS res, {res2:Nullable(DateTime64(9, 'UTC'))} AS res2

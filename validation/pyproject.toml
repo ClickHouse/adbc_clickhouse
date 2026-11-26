@@ -1,0 +1,13 @@
+[project]
+name = "adbc-clickhouse-validation"
+version = "0"
+description = "Runs the ADBC Driver Foundry validation suite against this driver"
+requires-python = ">=3.13"
+dependencies = [
+  # Pinned to a commit: the suite adds tests often, and a new test that fails must not break
+  # CI on an unrelated PR. Bump it on purpose and update the quirks in the same PR.
+  "adbc-drivers-validation @ git+https://github.com/adbc-drivers/validation@e4c18a5ccf74dec1efd5b1b11fc6fedd35dc349d",
+]
+
+[tool.uv]
+package = false

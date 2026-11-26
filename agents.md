@@ -16,6 +16,7 @@ A primer for AI agents working on this repository. Read this before doing substa
   - Integration only: `cargo test --test it`
   - Single test: `cargo test --test it <name>`
 - Optional env flags for the integration suite: `ADBC_CLICKHOUSE_TEST_MULTI_THREAD=1`, `ADBC_CLICKHOUSE_TEST_LOAD_DYNAMIC=1` (with `--features ffi`).
+- ADBC validation suite (adbc-drivers/validation, Python, loads the dylib via the C API): `cargo build --features ffi && cd validation && uv run pytest tests/`. See `validation/README.md`. `xfail` is strict, so fixing a driver gap means deleting its `xfail` mark (or `broken-driver` tag in `validation/queries/`) in the same PR.
 
 ## How the driver paths fit together
 
@@ -67,6 +68,14 @@ When making claims about library behavior:
 
 - Issue #49: `Statement::execute()` used to error on DDL/DML (`Schema error: response stream ended before receiving Schema`) because ClickHouse omits the Arrow IPC schema header for no-result statements. Fixed by returning an empty `RecordBatchReader` (`Schema::empty().into()`, no batches) from `ArrowStreamReader::begin()` instead of erroring. See `description.md` in the repo root for the PR description draft.
 - "All result columns nullable" report (draft issue, Aug 2026): **does not reproduce at the driver level.** The server's `ArrowStream` bytes carry correct per-field nullable flags (verified against CH 26.7.1.1315 by round-tripping through `clickhouse local` + `file(..., ArrowStream)`), and the driver takes the result schema verbatim from the IPC bytes, so the flags propagate. Verified correct on: the pure-Rust API, static FFI via `adbc_driver_manager`, and the released dylibs `0.1.0-alpha.1`/`0.1.0-alpha.2`/`0.1.0` loaded dynamically — for expression columns, table columns, and zero-row results. Repro tests: `tests/it/nullability.rs` (dylib test gated on `ADBC_CLICKHOUSE_TEST_DYLIB=/path/to/dylib`). The flattening most likely happens downstream in dbt-fusion, not here.
+
+## ADBC validation suite quirks
+
+- The suite's bind tests use `$1`-style placeholders and fields named `"0"`, `"1"`. ClickHouse query parameter names must be identifiers (`{0:Int32}` is a server syntax error), so the harness uses `statement_bind_test_mode="select"` (one bound row per execution, which is all a non-insert query accepts) and overrides each `type/bind/*` case's `bind_query` with `SELECT {res:Nullable(T)} AS res`.
+- ClickHouse's `ArrowStream` output attaches the server time zone to `DateTime64` without one; `get_table_schema()` doesn't (no tz), so the two disagree for those columns.
+- The suite's `metadata_type_name` switch covers both query results and `get_table_schema()`. This driver sets `CLICKHOUSE:type` only on the latter, so `validation/tests/test_query.py` skips that check for `get_table_schema()`.
+- The driver only implements `append` ingest, but every upstream ingest test starts with `create`, so `validation/tests/test_ingest.py` adds `test_append_existing_table*`, which create the table with SQL first.
+- The Foundry build repo `adbc-drivers/clickhouse` has its own copy of the quirks (`src/validation/`) that runs only when its submodule is bumped; it drifts from this repo's behavior.
 
 ## Downstream: how dbt-fusion loads this driver
 

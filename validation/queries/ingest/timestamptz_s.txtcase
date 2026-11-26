@@ -1,0 +1,27 @@
+// part: metadata
+
+[tags]
+caveats = ["`DateTime64` keeps the column's time zone"]
+
+// part: expected_schema
+
+{
+    "format": "+s",
+    "children": [
+        {
+            "name": "idx",
+            "format": "l",
+            "flags": ["nullable"]
+        },
+        {
+            "name": "value",
+            "format": "tss:UTC",
+            "flags": ["nullable"]
+        },
+        {
+            "name": "value2",
+            "format": "tss:Asia/Tokyo",
+            "flags": ["nullable"]
+        }
+    ]
+}
