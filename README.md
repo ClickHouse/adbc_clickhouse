@@ -19,6 +19,7 @@ However, the core query flow is supported:
 * Creating a `Driver` and `Database`
 * Setting URL, username and password on the `Database`
 * Creating a `Connection` and `Statement`
+* Querying driver/vendor metadata with `Connection::get_info()`
 * Setting a query with `Statement::set_sql_query()` and binding parameters with `Statement::bind()`
 * Binding a statement in streaming insert mode with `Statement::bind_stream()`
 * Executing a statement with `Statement::execute()` or `Statement::execute_update()`
